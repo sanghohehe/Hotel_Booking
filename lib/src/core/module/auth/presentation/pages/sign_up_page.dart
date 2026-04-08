@@ -1,8 +1,6 @@
-// lib/src/features/auth/presentation/pages/sign_up_page.dart
-
+import 'package:booking_app/src/core/module/auth/presentation/pages/widget/textFieldWidget.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-
 import '../../../../../core/supabase/supabase_manager.dart';
 
 class SignUpPage extends StatefulWidget {
@@ -13,6 +11,7 @@ class SignUpPage extends StatefulWidget {
 }
 
 class _SignUpPageState extends State<SignUpPage> {
+  final _formKey = GlobalKey<FormState>();
   final _fullNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -30,49 +29,31 @@ class _SignUpPageState extends State<SignUpPage> {
   }
 
   Future<void> _onSignUp() async {
-    final fullName = _fullNameController.text.trim();
-    final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
-
-    if (email.isEmpty || password.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Nhập email & mật khẩu')));
-      return;
-    }
+    if (!_formKey.currentState!.validate()) return;
 
     setState(() => _isLoading = true);
-
     try {
       final res = await _client.auth.signUp(
-        email: email,
-        password: password,
-        data: {if (fullName.isNotEmpty) 'full_name': fullName},
+        email: _emailController.text.trim(),
+        password: _passwordController.text.trim(),
+        data: {'full_name': _fullNameController.text.trim()},
       );
 
-      final user = res.user;
-      if (user == null) {
-        throw Exception('Sign up failed: user is null');
-      }
+      if (res.user == null) throw Exception('Đăng ký thất bại');
 
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đăng ký thành công cho ${user.email}')),
+        const SnackBar(
+          content: Text('Đăng ký thành công! Vui lòng kiểm tra email.'),
+          behavior: SnackBarBehavior.floating,
+        ),
       );
-
-      // Quay lại màn SignIn
       Navigator.of(context).pop();
     } on AuthException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi đăng ký: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message), behavior: SnackBarBehavior.floating),
+      );
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
@@ -81,90 +62,156 @@ class _SignUpPageState extends State<SignUpPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    const primaryColor = Colors.teal;
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Create account')),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Welcome to HotelBooking',
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
+      body: Stack(
+        children: [
+          Container(
+            decoration: const BoxDecoration(
+              image: DecorationImage(
+                image: AssetImage('assets/images/hotel_bg.jpg'),
+                fit: BoxFit.cover,
               ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Create your account to start booking.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.grey[700],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              TextField(
-                controller: _fullNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Full name',
-                  prefixIcon: Icon(Icons.person_outline),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              TextField(
-                controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  prefixIcon: Icon(Icons.email_outlined),
-                ),
-                keyboardType: TextInputType.emailAddress,
-              ),
-              const SizedBox(height: 16),
-
-              TextField(
-                controller: _passwordController,
-                obscureText: _obscure,
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  prefixIcon: const Icon(Icons.lock_outline),
-                  suffixIcon: IconButton(
-                    icon: Icon(
-                      _obscure ? Icons.visibility_off : Icons.visibility,
-                    ),
-                    onPressed: () {
-                      setState(() {
-                        _obscure = !_obscure;
-                      });
-                    },
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _onSignUp,
-                  child:
-                      _isLoading
-                          ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                          : const Text('Sign Up'),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  Colors.black.withOpacity(0.3),
+                  Colors.black.withOpacity(0.8),
+                ],
+              ),
+            ),
+          ),
+
+          SafeArea(
+            child: Column(
+              children: [
+                const SizedBox(height: 20),
+                Align(
+                  alignment: Alignment.topLeft,
+                  child: IconButton(
+                    icon: const Icon(
+                      Icons.arrow_back_ios_new,
+                      color: Colors.white,
+                    ),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                ),
+                const Spacer(),
+
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 32,
+                  ),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(32),
+                      topRight: Radius.circular(32),
+                    ),
+                  ),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Tạo tài khoản mới',
+                          style: theme.textTheme.headlineSmall?.copyWith(
+                            fontWeight: FontWeight.bold,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Bắt đầu hành trình trải nghiệm nghỉ dưỡng tuyệt vời.',
+                          style: TextStyle(color: Colors.grey[600]),
+                        ),
+                        const SizedBox(height: 32),
+
+                        CustomTextField(
+                          controller: _fullNameController,
+                          label: 'Họ và tên',
+                          hint: 'Nguyễn Văn A',
+                          icon: Icons.person_outline,
+                          validator:
+                              (v) => v!.isEmpty ? 'Vui lòng nhập họ tên' : null,
+                        ),
+                        const SizedBox(height: 20),
+
+                        CustomTextField(
+                          controller: _emailController,
+                          label: 'Email Address',
+                          hint: 'example@gmail.com',
+                          icon: Icons.email_outlined,
+                          validator:
+                              (v) =>
+                                  !v!.contains('@')
+                                      ? 'Email không hợp lệ'
+                                      : null,
+                        ),
+                        const SizedBox(height: 20),
+
+                        CustomTextField(
+                          controller: _passwordController,
+                          label: 'Password',
+                          hint: '••••••••',
+                          icon: Icons.lock_outline,
+                          isPassword: true,
+                          obscureText: _obscure,
+                          onSuffixIconPressed:
+                              () => setState(() => _obscure = !_obscure),
+                          validator:
+                              (v) =>
+                                  v!.length < 6
+                                      ? 'Mật khẩu tối thiểu 6 ký tự'
+                                      : null,
+                        ),
+
+                        const SizedBox(height: 32),
+
+                        SizedBox(
+                          width: double.infinity,
+                          height: 56,
+                          child: ElevatedButton(
+                            onPressed: _isLoading ? null : _onSignUp,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: primaryColor,
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              elevation: 0,
+                            ),
+                            child:
+                                _isLoading
+                                    ? const CircularProgressIndicator(
+                                      color: Colors.white,
+                                    )
+                                    : const Text(
+                                      'ĐĂNG KÝ NGAY',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

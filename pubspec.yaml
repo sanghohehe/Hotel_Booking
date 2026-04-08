@@ -1,7 +1,6 @@
 name: booking_app
 description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
+
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 
 
@@ -14,6 +13,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+   
 
   #supabase
   supabase_flutter: ^2.6.0
@@ -40,5 +40,9 @@ dev_dependencies:
 flutter:
 
 
+
+
   uses-material-design: true
+  assets:
+    - assets/images/hotel_bg.jpg
 
