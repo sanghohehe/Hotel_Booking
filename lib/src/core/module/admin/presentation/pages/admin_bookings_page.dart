@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
-import 'package:postgrest/postgrest.dart';
 
 import '../../../../supabase/supabase_manager.dart';
 

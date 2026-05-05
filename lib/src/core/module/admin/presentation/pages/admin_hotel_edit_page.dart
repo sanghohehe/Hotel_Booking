@@ -1,19 +1,28 @@
 import 'dart:io';
 
+import 'package:booking_app/src/core/module/admin/domain/usecases/image_picker_usecase.dart';
+import 'package:booking_app/src/core/module/admin/domain/usecases/init_hotel_usecase.dart';
+import 'package:booking_app/src/core/module/admin/domain/usecases/load_rooms_usecase.dart';
+import 'package:booking_app/src/core/module/admin/domain/usecases/save_room_type_usecase.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../../../../supabase/supabase_manager.dart';
-import '../../../hotel/data/hotel_api.dart';
-import '../../../hotel/data/models/hotel_model.dart';
+import 'package:booking_app/src/core/module/hotel/data/hotel_api.dart';
+import 'package:booking_app/src/core/module/hotel/data/models/hotel_model.dart';
+import 'package:booking_app/src/core/module/admin/presentation/widgets/room_type_item.dart';
+import 'package:booking_app/src/core/module/admin/presentation/widgets/room_type_form_sheet.dart';
+
+import '../cubit/admin_hotel_edit_cubit.dart';
+import '../cubit/admin_hotel_edit_state.dart';
+
+import '../../domain/usecases/save_hotel_usecase.dart';
+import '../../domain/usecases/delete_room_usecase.dart';
+import '../../data/repositories/hotel_repository_impl.dart';
 
 class AdminHotelEditPage extends StatefulWidget {
-  final HotelModel? hotel; // null = create, != null = edit
-
+  final HotelModel? hotel;
   const AdminHotelEditPage({super.key, this.hotel});
-
-  bool get isEdit => hotel != null;
 
   @override
   State<AdminHotelEditPage> createState() => _AdminHotelEditPageState();
@@ -21,600 +30,558 @@ class AdminHotelEditPage extends StatefulWidget {
 
 class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
   final _formKey = GlobalKey<FormState>();
-  final _api = HotelApi();
-  final _picker = ImagePicker();
+  final _nameCtrl = TextEditingController();
+  final _cityCtrl = TextEditingController();
+  final _addrCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+  final _detailAddrCtrl = TextEditingController();
 
-  late final TextEditingController _nameController;
-  late final TextEditingController _cityController;
-  late final TextEditingController _addressController;
-  late final TextEditingController _descController;
-
-  double _rating = 4.0;
-  String? _imageUrl; // url hiện tại trong DB
-  XFile? _pickedImage; // ảnh mới chọn
-  bool _saving = false;
-
-  // room types
-  List<RoomTypeModel> _roomTypes = [];
-  bool _loadingRooms = false;
+  late final AdminHotelEditCubit _cubit;
 
   @override
   void initState() {
     super.initState();
-    final h = widget.hotel;
-    _nameController = TextEditingController(text: h?.name ?? '');
-    _cityController = TextEditingController(text: h?.city ?? '');
-    _addressController = TextEditingController(text: h?.address ?? '');
-    _descController = TextEditingController(text: h?.description ?? '');
-    _rating = h?.starRating ?? 4.0;
-    _imageUrl = h?.thumbnailUrl;
 
-    if (widget.isEdit) {
-      _loadRoomTypes();
+    final repo = HotelRepositoryImpl(HotelApi());
+    _cubit = AdminHotelEditCubit(
+      saveHotelUseCase: SaveHotelUseCase(repo),
+      deleteRoomUseCase: DeleteRoomUseCase(repo),
+      loadRoomsUseCase: LoadRoomsUseCase(repo),
+      initHotelUseCase: InitHotelUseCase(),
+      pickImagesUseCase: PickImagesUseCase(ImagePicker()),
+      saveRoomTypeUseCase: SaveRoomTypeUseCase(repo),
+    );
+
+    _nameCtrl.text = widget.hotel?.name ?? '';
+    _descCtrl.text = widget.hotel?.description ?? '';
+
+    if (widget.hotel != null) {
+      final parts = widget.hotel!.address.split(',');
+      if (parts.isNotEmpty) {
+        _detailAddrCtrl.text = parts[0].trim();
+      }
     }
+
+    _cubit.loadLocationData().then((_) {
+      if (widget.hotel != null) {
+        _cubit.initHotel(widget.hotel!);
+        _cubit.loadRooms(widget.hotel!.id);
+      }
+    });
   }
 
   @override
   void dispose() {
-    _nameController.dispose();
-    _cityController.dispose();
-    _addressController.dispose();
-    _descController.dispose();
+    _cubit.close();
+    _nameCtrl.dispose();
+    _cityCtrl.dispose();
+    _addrCtrl.dispose();
+    _descCtrl.dispose();
+    _detailAddrCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _loadRoomTypes() async {
-    if (!widget.isEdit) return;
-    setState(() {
-      _loadingRooms = true;
-    });
-    try {
-      final list = await _api.getRoomTypesForHotel(widget.hotel!.id);
-      if (!mounted) return;
-      setState(() {
-        _roomTypes = list;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi tải room types: $e')));
-    } finally {
-      if (mounted) {
-        setState(() {
-          _loadingRooms = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _pickImage() async {
-    final picked = await _picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1600,
-      imageQuality: 85,
-    );
-    if (picked != null) {
-      setState(() {
-        _pickedImage = picked;
-      });
-    }
-  }
-
-  Future<String?> _uploadImageIfNeeded() async {
-    if (_pickedImage == null) return _imageUrl; // giữ nguyên nếu không đổi
-
-    try {
-      final client = SupabaseManager.client;
-      final bytes = await _pickedImage!.readAsBytes();
-
-      // 👉 đảm bảo đã tạo bucket 'hotel-images' (public) trong Supabase Storage
-      final bucket = client.storage.from('hotel-images');
-
-      final fileName =
-          'hotel_${widget.hotel?.id ?? DateTime.now().millisecondsSinceEpoch}.jpg';
-
-      await bucket.uploadBinary(
-        fileName,
-        bytes,
-        fileOptions: const FileOptions(upsert: true, contentType: 'image/jpeg'),
-      );
-
-      final publicUrl = bucket.getPublicUrl(fileName);
-      return publicUrl;
-    } catch (e) {
-      if (!mounted) return _imageUrl;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi upload ảnh: $e')));
-      return _imageUrl;
-    }
-  }
-
-  Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _saving = true);
-
-    try {
-      final name = _nameController.text.trim();
-      final city = _cityController.text.trim();
-      final address = _addressController.text.trim();
-      final desc =
-          _descController.text.trim().isEmpty
-              ? null
-              : _descController.text.trim();
-
-      final thumbnailUrl = await _uploadImageIfNeeded();
-
-      if (widget.isEdit) {
-        await _api.updateHotel(
-          id: widget.hotel!.id,
-          name: name,
-          city: city,
-          address: address,
-          description: desc,
-          starRating: _rating,
-          thumbnailUrl: thumbnailUrl,
-        );
-      } else {
-        await _api.createHotel(
-          name: name,
-          city: city,
-          address: address,
-          description: desc,
-          starRating: _rating,
-          thumbnailUrl: thumbnailUrl,
-        );
-      }
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(widget.isEdit ? 'Hotel updated' : 'Hotel created'),
-        ),
-      );
-      Navigator.of(context).pop(true); // báo màn trước reload
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi lưu hotel: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  Future<void> _openRoomTypeForm({RoomTypeModel? room}) async {
-    if (!widget.isEdit) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Hãy tạo hotel trước rồi mới thêm phòng.'),
-        ),
-      );
-      return;
-    }
-
-    final nameController = TextEditingController(text: room?.name ?? '');
-    final priceController = TextEditingController(
-      text: room?.pricePerNight.toString() ?? '',
-    );
-    final capacityController = TextEditingController(
-      text: room?.capacity.toString() ?? '',
-    );
-    final bedController = TextEditingController(text: room?.bedType ?? '');
-    final descController = TextEditingController(text: room?.description ?? '');
-
-    final isEdit = room != null;
-
-    final result = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        final bottomInset = MediaQuery.of(ctx).viewInsets.bottom;
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: bottomInset + 16,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  isEdit ? 'Edit room type' : 'Add room type',
-                  style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Name',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: priceController,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  decoration: const InputDecoration(
-                    labelText: 'Price per night',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: capacityController,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'Capacity',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: bedController,
-                  decoration: const InputDecoration(
-                    labelText: 'Bed type (optional)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: descController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: 'Description (optional)',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(false),
-                      child: const Text('Cancel'),
-                    ),
-                    const SizedBox(width: 8),
-                    ElevatedButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      child: const Text('Save'),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-
-    if (result != true) return;
-
-    final name = nameController.text.trim();
-    final price = double.tryParse(priceController.text.trim());
-    final cap = int.tryParse(capacityController.text.trim());
-
-    if (name.isEmpty || price == null || cap == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Name, price, capacity are required')),
-      );
-      return;
-    }
-
-    try {
-      if (isEdit) {
-        await _api.updateRoomType(
-          id: room!.id,
-          name: name,
-          pricePerNight: price,
-          capacity: cap,
-          bedType:
-              bedController.text.trim().isEmpty
-                  ? null
-                  : bedController.text.trim(),
-          description:
-              descController.text.trim().isEmpty
-                  ? null
-                  : descController.text.trim(),
-        );
-      } else {
-        await _api.createRoomType(
-          hotelId: widget.hotel!.id,
-          name: name,
-          pricePerNight: price,
-          capacity: cap,
-          bedType:
-              bedController.text.trim().isEmpty
-                  ? null
-                  : bedController.text.trim(),
-          description:
-              descController.text.trim().isEmpty
-                  ? null
-                  : descController.text.trim(),
-        );
-      }
-      _loadRoomTypes();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi lưu room type: $e')));
-    }
-  }
-
-  Future<void> _deleteRoomType(RoomTypeModel room) async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder:
-          (ctx) => AlertDialog(
-            title: const Text('Delete room'),
-            content: Text('Xoá loại phòng "${room.name}"?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text(
-                  'Delete',
-                  style: TextStyle(color: Colors.red),
-                ),
-              ),
-            ],
-          ),
-    );
-    if (confirm != true) return;
-
-    try {
-      await _api.deleteRoomType(room.id);
-      _loadRoomTypes();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi xoá room type: $e')));
-    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final isEdit = widget.isEdit;
-
-    Widget buildImagePreview() {
-      Widget child;
-      if (_pickedImage != null) {
-        child = Image.file(File(_pickedImage!.path), fit: BoxFit.cover);
-      } else if (_imageUrl != null && _imageUrl!.isNotEmpty) {
-        child = Image.network(
-          _imageUrl!,
-          fit: BoxFit.cover,
-          errorBuilder:
-              (_, __, ___) =>
-                  const Center(child: Icon(Icons.broken_image, size: 40)),
-        );
-      } else {
-        child = const Center(
-          child: Icon(Icons.photo, size: 40, color: Colors.grey),
-        );
-      }
-
-      return GestureDetector(
-        onTap: _pickImage,
-        child: Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(16),
-              child: AspectRatio(
-                aspectRatio: 16 / 9,
-                child: Container(color: Colors.grey[200], child: child),
+    return BlocProvider.value(
+      value: _cubit,
+      child: BlocConsumer<AdminHotelEditCubit, AdminHotelEditState>(
+        listener: (context, state) {
+          if (state.isSuccess) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Cập nhật thành công!')),
+            );
+            Navigator.pop(context, true);
+          }
+          if (state.error != null) {
+            ScaffoldMessenger.of(context)
+                .showSnackBar(SnackBar(content: Text(state.error!)));
+          }
+        },
+        builder: (context, state) {
+          if (state.isLoading) {
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
+          }
+          return Scaffold(
+            appBar: AppBar(
+              title: Text(
+                widget.hotel == null ? "Thêm khách sạn" : "Sửa khách sạn",
               ),
             ),
-            Positioned(
-              right: 12,
-              bottom: 12,
-              child: CircleAvatar(
-                radius: 18,
-                backgroundColor: Colors.black.withOpacity(0.6),
-                child: const Icon(
-                  Icons.camera_alt,
-                  size: 18,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ],
+            body: _buildInputs(context, state, Theme.of(context)),
+            bottomNavigationBar:
+                _buildBottomBar(context, state, Theme.of(context)),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildSectionTitle(BuildContext context, String title, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).primaryColor),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
         ),
-      );
-    }
+      ],
+    );
+  }
 
-    Widget buildRoomTypesSection() {
-      if (!isEdit) {
-        return const SizedBox.shrink();
-      }
+  Widget _buildGallery(BuildContext context, AdminHotelEditState state) {
+    final images = [
+      ...state.existingImages,
+      ...state.newImages.map((e) => e.path),
+    ];
 
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 24),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Room types',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              TextButton.icon(
-                onPressed: _openRoomTypeForm,
-                icon: const Icon(Icons.add),
-                label: const Text('Add'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          if (_loadingRooms)
-            const Center(child: CircularProgressIndicator())
-          else if (_roomTypes.isEmpty)
-            const Text('Chưa có loại phòng nào.')
-          else
-            Column(
-              children:
-                  _roomTypes.map((r) {
-                    return Card(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      child: ListTile(
-                        title: Text(r.name),
-                        subtitle: Text(
-                          '\$${r.pricePerNight.toStringAsFixed(0)} / night • ${r.capacity} guest(s)',
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.edit),
-                              onPressed: () => _openRoomTypeForm(room: r),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red),
-                              onPressed: () => _deleteRoomType(r),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
-            ),
+    return Container(
+      height: 200,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10),
         ],
-      );
-    }
-
-    return Scaffold(
-      appBar: AppBar(title: Text(isEdit ? 'Edit hotel' : 'Create hotel')),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child: Form(
-            key: _formKey,
-            child: Column(
-              children: [
-                buildImagePreview(),
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: theme.cardColor,
-                    borderRadius: BorderRadius.circular(16),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.05),
-                        blurRadius: 8,
-                        offset: const Offset(0, 4),
-                      ),
-                    ],
-                  ),
-                  child: Column(
-                    children: [
-                      TextFormField(
-                        controller: _nameController,
-                        decoration: const InputDecoration(labelText: 'Name'),
-                        validator:
-                            (v) =>
-                                v == null || v.trim().isEmpty
-                                    ? 'Required'
-                                    : null,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _cityController,
-                        decoration: const InputDecoration(labelText: 'City'),
-                        validator:
-                            (v) =>
-                                v == null || v.trim().isEmpty
-                                    ? 'Required'
-                                    : null,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _addressController,
-                        decoration: const InputDecoration(labelText: 'Address'),
-                        validator:
-                            (v) =>
-                                v == null || v.trim().isEmpty
-                                    ? 'Required'
-                                    : null,
-                      ),
-                      const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _descController,
-                        maxLines: 3,
-                        decoration: const InputDecoration(
-                          labelText: 'Description',
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: images.isEmpty
+            ? InkWell(
+                onTap: () =>
+                    context.read<AdminHotelEditCubit>().pickImages(),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.add_photo_alternate_outlined,
+                      size: 48,
+                      color: Colors.grey[400],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "Nhấn để tải ảnh lên",
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  ],
+                ),
+              )
+            : Stack(
+                children: [
+                  PageView.builder(
+                    itemCount: images.length,
+                    onPageChanged: (i) =>
+                        context.read<AdminHotelEditCubit>().setCurrentIndex(i),
+                    itemBuilder: (_, index) {
+                      final img = images[index];
+                      final isNetwork = img.startsWith('http');
+                      return Stack(
+                        fit: StackFit.expand,
                         children: [
-                          const Text('Star rating'),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Slider(
-                              value: _rating,
-                              min: 1,
-                              max: 5,
-                              divisions: 8,
-                              label: _rating.toStringAsFixed(1),
-                              onChanged: (v) {
-                                setState(() {
-                                  _rating = v;
-                                });
-                              },
+                          isNetwork
+                              ? Image.network(img, fit: BoxFit.cover)
+                              : Image.file(File(img), fit: BoxFit.cover),
+                          Positioned(
+                            top: 8,
+                            right: 8,
+                            child: CircleAvatar(
+                              backgroundColor: Colors.black.withOpacity(0.5),
+                              child: IconButton(
+                                icon: const Icon(
+                                  Icons.delete_outline,
+                                  color: Colors.white,
+                                ),
+                                onPressed: () {
+                                  final cubit =
+                                      context.read<AdminHotelEditCubit>();
+                                  if (index < state.existingImages.length) {
+                                    cubit.removeExistingImage(index);
+                                  } else {
+                                    cubit.removeNewImage(
+                                      index - state.existingImages.length,
+                                    );
+                                  }
+                                },
+                              ),
                             ),
-                          ),
-                          Text(
-                            _rating.toStringAsFixed(1),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
                           ),
                         ],
+                      );
+                    },
+                  ),
+                  Positioned(
+                    bottom: 12,
+                    right: 12,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
                       ),
-                    ],
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text(
+                        "${state.currentIndex + 1}/${images.length}",
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-                buildRoomTypesSection(),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: _saving ? null : _save,
-                    icon:
-                        _saving
-                            ? const SizedBox(
-                              height: 18,
-                              width: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                            : const Icon(Icons.save),
-                    label: Text(isEdit ? 'Save changes' : 'Create hotel'),
+                  Positioned(
+                    bottom: 8,
+                    left: 8,
+                    child: FloatingActionButton.small(
+                      heroTag: 'add_img',
+                      onPressed: () =>
+                          context.read<AdminHotelEditCubit>().pickImages(),
+                      child: const Icon(Icons.add_a_photo),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
+      ),
+    );
+  }
+
+  Widget _buildInputs(
+    BuildContext context,
+    AdminHotelEditState state,
+    ThemeData theme,
+  ) {
+    final cubit = context.read<AdminHotelEditCubit>();
+    return Form(
+      key: _formKey,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            _buildSectionTitle(context, "Hình ảnh", Icons.image),
+            const SizedBox(height: 12),
+            _buildGallery(context, state),
+
+            const SizedBox(height: 24),
+            _buildSectionTitle(
+                context, "Thông tin chung", Icons.info_outline),
+            const SizedBox(height: 12),
+            _customTextField(
+              controller: _nameCtrl,
+              label: "Tên khách sạn",
+              icon: Icons.hotel,
+            ),
+            const SizedBox(height: 16),
+
+            _buildDropdown(
+              label: "Tỉnh / Thành phố",
+              value: state.selectedProvince,
+              items: state.provinces,
+              onChanged: (val) => cubit.onProvinceChanged(val),
+            ),
+            const SizedBox(height: 16),
+            _buildDropdown(
+              label: "Quận / Huyện",
+              value: state.selectedDistrict,
+              items: state.districts,
+              onChanged: (val) => cubit.onDistrictChanged(val),
+            ),
+            const SizedBox(height: 16),
+            _buildDropdown(
+              label: "Phường / Xã",
+              value: state.selectedWard,
+              items: state.wards,
+              onChanged: (val) {
+                cubit.onWardChanged(val);
+                _addrCtrl.text =
+                    "$val, ${state.selectedDistrict}, ${state.selectedProvince}";
+              },
+            ),
+            const SizedBox(height: 16),
+            _customTextField(
+              controller: _detailAddrCtrl,
+              label: "Số nhà, tên đường",
+              icon: Icons.location_on_outlined,
+              hint: "Ví dụ: 123 Võ Nguyên Giáp",
+            ),
+            const SizedBox(height: 16),
+
+            _customTextField(
+              controller: _descCtrl,
+              label: "Mô tả",
+              icon: Icons.description,
+              maxLines: 3,
+            ),
+
+            const SizedBox(height: 24),
+            _buildSectionTitle(context, "Loại phòng", Icons.meeting_room),
+            const SizedBox(height: 12),
+            _buildRoomList(context, state),
+
+            const SizedBox(height: 100),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDropdown({
+    required String label,
+    required String? value,
+    required List<dynamic> items,
+    required Function(String?) onChanged,
+  }) {
+    final bool hasValue = items.any((item) => item['name'] == value);
+
+    return DropdownButtonFormField<String>(
+      value: hasValue ? value : null,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: label,
+        filled: true,
+        fillColor: Colors.grey[50],
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      items: items.map<DropdownMenuItem<String>>((item) {
+        return DropdownMenuItem<String>(
+          value: item['name'] as String,
+          child: Text(
+            item['name'] as String,
+            overflow: TextOverflow.ellipsis,
+          ),
+        );
+      }).toList(),
+      onChanged: onChanged,
+    );
+  }
+
+  Widget _customTextField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? hint,
+    int maxLines = 1,
+  }) {
+    return TextFormField(
+      controller: controller,
+      maxLines: maxLines,
+      style: const TextStyle(fontSize: 15),
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        hintStyle: TextStyle(color: Colors.grey[400], fontSize: 14),
+        prefixIcon: Icon(icon, size: 22, color: Colors.blueGrey[600]),
+        alignLabelWithHint: true,
+        filled: true,
+        fillColor: Colors.grey[50],
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 12,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[300]!),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: Colors.grey[200]!),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.blue, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Colors.redAccent, width: 1),
+        ),
+      ),
+      validator: (value) {
+        if (value == null || value.isEmpty) {
+          return 'Thông tin này không được bỏ trống';
+        }
+        return null;
+      },
+    );
+  }
+
+  Widget _buildRoomList(BuildContext context, AdminHotelEditState state) {
+    if (state.roomTypes.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 20),
+          child: Text(
+            "Chưa có loại phòng nào được tạo",
+            style: TextStyle(
+              color: Colors.grey[400],
+              fontStyle: FontStyle.italic,
             ),
           ),
         ),
+      );
+    }
+
+    return ListView.separated(
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      itemCount: state.roomTypes.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final room = state.roomTypes[index];
+        return Container(
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            boxShadow: [
+              BoxShadow(
+                  color: Colors.black.withOpacity(0.03), blurRadius: 5),
+            ],
+          ),
+          child: RoomTypeItem(
+            room: room,
+            onEdit: () => _openEditRoom(context, room),
+            onDelete: () =>
+                _showDeleteDialog(context, room.id, widget.hotel!.id),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomBar(
+    BuildContext context,
+    AdminHotelEditState state,
+    ThemeData theme,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        child: ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            minimumSize: const Size(double.infinity, 54),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            elevation: 0,
+          ),
+          onPressed: state.isSaving
+              ? null
+              : () {
+                  if (_formKey.currentState!.validate()) {
+                    context.read<AdminHotelEditCubit>().onSave(
+                          existing: widget.hotel,
+                          name: _nameCtrl.text,
+                          city: state.selectedProvince ?? '',
+                          address: _addrCtrl.text,
+                          desc: _descCtrl.text,
+                          detailAddress: _detailAddrCtrl.text,
+                        );
+                  }
+                },
+          child: state.isSaving
+              ? const SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                )
+              : const Text(
+                  "XÁC NHẬN LƯU",
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.2,
+                  ),
+                ),
+        ),
+      ),
+    );
+  }
+
+  void _openEditRoom(BuildContext context, RoomTypeModel room) {
+    final cubit = context.read<AdminHotelEditCubit>();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return RoomTypeFormSheet(
+          room: room,
+          onSave: (
+            name,
+            price,
+            capacity,
+            bed,
+            desc,
+            amenities,
+            newImages,
+            existingImages,
+          ) async {
+            try {
+              final updatedRoom = RoomTypeModel(
+                id: room.id,
+                name: name,
+                description: desc,
+                capacity: capacity,
+                bedType: bed,
+                pricePerNight: price,
+                isActive: room.isActive,
+                inventory: room.inventory,
+                imageUrl: existingImages,
+                amenities: amenities,
+              );
+
+              await cubit.saveRoomType(
+                hotelId: widget.hotel!.id,
+                room: updatedRoom,
+                newImages: newImages,
+              );
+
+              if (!context.mounted) return;
+              Navigator.pop(sheetContext);
+            } catch (e) {
+              ScaffoldMessenger.of(context)
+                  .showSnackBar(SnackBar(content: Text("Lỗi: $e")));
+            }
+          },
+        );
+      },
+    );
+  }
+
+  void _showDeleteDialog(BuildContext context, String roomId, String hotelId) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Xóa phòng"),
+        content: const Text("Bạn chắc chắn muốn xóa?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Hủy"),
+          ),
+          TextButton(
+            onPressed: () {
+              context.read<AdminHotelEditCubit>().deleteRoom(roomId, hotelId);
+              Navigator.pop(context);
+            },
+            child: const Text("Xóa", style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
   }

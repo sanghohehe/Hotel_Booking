@@ -1,9 +1,13 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
 
-import '../../data/hotel_api.dart';
+import 'package:booking_app/src/core/module/hotel/domain/entities/hotel_entity.dart';
+import 'package:booking_app/src/core/module/hotel/presentation/cubit/HotelState.dart';
+import 'package:booking_app/src/core/module/hotel/presentation/cubit/hotel_cubit.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../data/city_api.dart';
-import '../../data/models/hotel_model.dart';
 import '../../data/models/city_model.dart';
+
 import 'hotel_detail_page.dart';
 
 class HotelListPage extends StatefulWidget {
@@ -14,17 +18,15 @@ class HotelListPage extends StatefulWidget {
 }
 
 class _HotelListPageState extends State<HotelListPage> {
-  final _hotelApi = HotelApi();
   final _cityApi = CityApi();
 
-  late Future<List<HotelModel>> _future;
-
-  // null = all, còn lại là min rating
   double? _selectedMinRating;
   final List<double?> _ratingFilters = [null, 4.0, 4.5, 5.0];
+  String? _selectedCity;
 
-  // filter theo city
-  String? _selectedCity; // null = All cities
+  String? _searchKeyword;
+  Timer? _debounce;
+
   bool _loadingCities = false;
   List<CityModel> _cities = [];
 
@@ -32,7 +34,13 @@ class _HotelListPageState extends State<HotelListPage> {
   void initState() {
     super.initState();
     _loadCities();
-    _future = _hotelApi.getHotels();
+    context.read<HotelCubit>().fetchHotels();
+  }
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadCities() async {
@@ -40,372 +48,394 @@ class _HotelListPageState extends State<HotelListPage> {
     try {
       final data = await _cityApi.getCities();
       if (!mounted) return;
-      setState(() {
-        _cities = data;
-      });
+      setState(() => _cities = data);
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi tải danh sách thành phố: $e')),
-      );
+      debugPrint("Error loading cities: $e");
     } finally {
-      if (mounted) {
-        setState(() => _loadingCities = false);
-      }
+      if (mounted) setState(() => _loadingCities = false);
     }
   }
 
-  Future<void> _reload() async {
-    setState(() {
-      _future = _hotelApi.getHotels(
-        minRating: _selectedMinRating,
-        city: _selectedCity,
-      );
+  void _reload() {
+    context.read<HotelCubit>().fetchHotels(
+      minRating: _selectedMinRating,
+      city: _selectedCity,
+      keyword: _searchKeyword,
+    );
+  }
+
+  void _onSearchChanged(String value) {
+    _searchKeyword = value;
+
+    if (_debounce?.isActive ?? false) _debounce!.cancel();
+
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      _reload();
     });
   }
 
-  String _ratingFilterLabel(double? value) {
-    if (value == null) return 'All';
-    if (value == 4.0) return '4.0+';
-    if (value == 4.5) return '4.5+';
-    if (value == 5.0) return '5.0';
-    return '${value.toStringAsFixed(1)}+';
+  void _clearSearch() {
+    _searchKeyword = null;
+    _reload();
+    setState(() {});
   }
 
-  Future<void> _openCityFilter() async {
-    // chưa load xong city thì thôi
-    if (_loadingCities && _cities.isEmpty) return;
+  Widget _buildAmenity(IconData icon, String text) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: Colors.teal),
+        const SizedBox(width: 4),
+        Text(text, style: const TextStyle(fontSize: 12, color: Colors.teal)),
+      ],
+    );
+  }
 
-    final result = await showModalBottomSheet<String?>(
+  void _openCityFilter() {
+    showModalBottomSheet(
       context: context,
-      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) {
-        String search = '';
-        final theme = Theme.of(ctx);
-
-        List<CityModel> filtered() {
-          if (search.trim().isEmpty) return _cities;
-          final q = search.toLowerCase();
-          return _cities
-              .where((c) => c.name.toLowerCase().contains(q))
-              .toList();
-        }
-
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            final items = filtered();
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 16,
-                right: 16,
-                top: 16,
-                bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
+      builder:
+          (context) => ListView(
+            shrinkWrap: true,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'Select City',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                  ),
-                  Text(
-                    'Chọn thành phố',
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      hintText: 'Tìm thành phố...',
-                      border: OutlineInputBorder(),
-                    ),
-                    onChanged: (v) => setModalState(() => search = v),
-                  ),
-                  const SizedBox(height: 12),
-                  ListTile(
-                    leading: const Icon(Icons.public),
-                    title: const Text('Tất cả thành phố'),
-                    onTap: () => Navigator.of(ctx).pop(null),
-                    selected: _selectedCity == null,
-                  ),
-                  const Divider(),
-                  Expanded(
-                    child: ListView.builder(
-                      shrinkWrap: true,
-                      itemCount: items.length,
-                      itemBuilder: (ctx, index) {
-                        final c = items[index];
-                        return ListTile(
-                          title: Text(c.name),
-                          onTap: () => Navigator.of(ctx).pop(c.name),
-                          selected: c.name == _selectedCity,
-                        );
-                      },
-                    ),
-                  ),
-                ],
+              ..._cities.map(
+                (city) => ListTile(
+                  title: Text(city.name),
+                  leading: const Icon(Icons.location_city),
+                  onTap: () {
+                    setState(() => _selectedCity = city.name);
+                    _reload();
+                    Navigator.pop(context);
+                  },
+                ),
               ),
-            );
-          },
-        );
-      },
+            ],
+          ),
     );
-
-    if (!mounted) return;
-    if (result == _selectedCity) return;
-
-    setState(() {
-      _selectedCity = result;
-    });
-    _reload();
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final primaryColor = const Color(0xFF1A237E);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Discover hotels')),
-      body: RefreshIndicator(
-        onRefresh: _reload,
-        child: FutureBuilder<List<HotelModel>>(
-          future: _future,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return ListView(
+      backgroundColor: Colors.grey[50],
+      body: CustomScrollView(
+        slivers: [
+          // APP BAR (GIỮ NGUYÊN)
+          SliverAppBar(
+            expandedHeight: 120.0,
+            floating: true,
+            pinned: true,
+            elevation: 0,
+            backgroundColor: Colors.white,
+            flexibleSpace: FlexibleSpaceBar(
+              titlePadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 12,
+              ),
+              centerTitle: false,
+              title: Text(
+                'Explore Hotels',
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: primaryColor,
+                ),
+              ),
+            ),
+          ),
+
+          // 🔥 FILTER (CHỈ GỘP SEARCH + CITY)
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SizedBox(height: 120),
-                  Center(
-                    child: Text(
-                      'Lỗi tải khách sạn:\n${snapshot.error}',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-              );
-            }
-
-            final hotels = snapshot.data ?? [];
-
-            return ListView.builder(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              itemCount: hotels.length + 1, // +1 cho phần filter header
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  // Header filter (city + rating)
-                  return Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // City filter
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Text(
-                            'Filter by city',
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          TextButton.icon(
-                            onPressed:
-                                _cities.isEmpty && _loadingCities
-                                    ? null
-                                    : _openCityFilter,
-                            icon: const Icon(Icons.location_on, size: 18),
-                            label: Text(
-                              _selectedCity ?? 'All cities',
-                              style: const TextStyle(fontSize: 14),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-
-                      // Rating filter
-                      Text(
-                        'Filter by rating',
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children:
-                              _ratingFilters.map((value) {
-                                final selected = value == _selectedMinRating;
-                                return Padding(
-                                  padding: const EdgeInsets.only(
-                                    right: 8.0,
-                                    bottom: 8,
-                                  ),
-                                  child: ChoiceChip(
-                                    label: Text(_ratingFilterLabel(value)),
-                                    selected: selected,
-                                    onSelected: (_) {
-                                      setState(() {
-                                        _selectedMinRating =
-                                            value == _selectedMinRating
-                                                ? null
-                                                : value;
-                                        _future = _hotelApi.getHotels(
-                                          minRating: _selectedMinRating,
-                                          city: _selectedCity,
-                                        );
-                                      });
-                                    },
-                                  ),
-                                );
-                              }).toList(),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (hotels.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 24.0),
-                          child: Center(
-                            child: Text('Không có khách sạn nào phù hợp'),
-                          ),
-                        ),
-                    ],
-                  );
-                }
-
-                final hotel = hotels[index - 1];
-
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: GestureDetector(
-                    onTap: () {
-                      Navigator.of(context).push(
-                        MaterialPageRoute(
-                          builder: (_) => HotelDetailPage(hotel: hotel),
-                        ),
-                      );
-                    },
+                  // ✅ GỘP 2 Ô TẠI ĐÂY
+                  GestureDetector(
+                    onTap: _openCityFilter,
                     child: Container(
-                      height: 110,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
-                        color: theme.cardColor,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.04),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey[200]!),
                       ),
                       child: Row(
                         children: [
-                          // Thumbnail
-                          ClipRRect(
-                            borderRadius: const BorderRadius.horizontal(
-                              left: Radius.circular(16),
-                            ),
-                            child: SizedBox(
-                              width: 120,
-                              height: double.infinity,
-                              child:
-                                  hotel.thumbnailUrl != null
-                                      ? Image.network(
-                                        hotel.thumbnailUrl!,
-                                        fit: BoxFit.cover,
-                                        errorBuilder:
-                                            (_, __, ___) => Container(
-                                              color: Colors.grey[300],
-                                            ),
-                                      )
-                                      : Container(
-                                        color: Colors.grey[200],
-                                        child: const Icon(
-                                          Icons.hotel,
-                                          size: 32,
-                                        ),
-                                      ),
-                            ),
-                          ),
+                          Icon(Icons.search, color: primaryColor),
                           const SizedBox(width: 12),
-                          // Info
+
                           Expanded(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                vertical: 10.0,
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    hotel.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: theme.textTheme.titleMedium
-                                        ?.copyWith(fontWeight: FontWeight.bold),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      const Icon(
-                                        Icons.location_on_outlined,
-                                        size: 14,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Expanded(
-                                        child: Text(
-                                          '${hotel.city} • ${hotel.address}',
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: theme.textTheme.bodySmall,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const Spacer(),
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.star,
-                                        size: 16,
-                                        color: Colors.amber,
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        hotel.starRating.toString(),
-                                        style: theme.textTheme.bodyMedium
-                                            ?.copyWith(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                      ),
-                                    ],
-                                  ),
-                                ],
+                            child: TextField(
+                              onChanged: _onSearchChanged,
+                              decoration: InputDecoration(
+                                border: InputBorder.none,
+                                hintText:
+                                    _selectedCity != null
+                                        ? '$_selectedCity - Search hotel...'
+                                        : 'Where are you going?',
                               ),
                             ),
                           ),
+
+                          if (_searchKeyword != null &&
+                              _searchKeyword!.isNotEmpty)
+                            GestureDetector(
+                              onTap: _clearSearch,
+                              child: const Icon(Icons.clear),
+                            ),
                         ],
                       ),
                     ),
                   ),
+
+                  const SizedBox(height: 16),
+
+                  // ⭐ RATING FILTER (GIỮ NGUYÊN)
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children:
+                          _ratingFilters.map((value) {
+                            final isSelected = value == _selectedMinRating;
+                            return Padding(
+                              padding: const EdgeInsets.only(right: 8.0),
+                              child: ChoiceChip(
+                                label: Text(
+                                  value == null ? 'All' : '$value+ ⭐',
+                                ),
+                                selected: isSelected,
+                                onSelected: (selected) {
+                                  setState(
+                                    () =>
+                                        _selectedMinRating =
+                                            isSelected ? null : value,
+                                  );
+                                  _reload();
+                                },
+                                selectedColor: primaryColor.withOpacity(0.1),
+                                labelStyle: TextStyle(
+                                  color:
+                                      isSelected
+                                          ? primaryColor
+                                          : Colors.grey[700],
+                                  fontWeight:
+                                      isSelected
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                ),
+                                backgroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(20),
+                                  side: BorderSide(
+                                    color:
+                                        isSelected
+                                            ? primaryColor
+                                            : Colors.grey[300]!,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // LIST (GIỮ NGUYÊN 100%)
+          BlocBuilder<HotelCubit, HotelState>(
+            builder: (context, state) {
+              if (state is HotelLoading) {
+                return const SliverFillRemaining(
+                  child: Center(child: CircularProgressIndicator()),
                 );
-              },
-            );
-          },
+              }
+
+              if (state is HotelError) {
+                return SliverFillRemaining(
+                  child: Center(child: Text(state.message)),
+                );
+              }
+
+              if (state is HotelLoaded) {
+                final hotels = state.hotels;
+
+                if (hotels.isEmpty) {
+                  return const SliverFillRemaining(
+                    child: Center(child: Text('No hotels found 🏨')),
+                  );
+                }
+
+                return SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  sliver: SliverList(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) =>
+                          _buildHotelCard(hotels[index], primaryColor),
+                      childCount: hotels.length,
+                    ),
+                  ),
+                );
+              }
+
+              return const SliverToBoxAdapter();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🔥 GIỮ NGUYÊN UI HOTEL 100%
+  Widget _buildHotelCard(HotelEntity hotel, Color primaryColor) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 15,
+            offset: const Offset(0, 5),
+          ),
+        ],
+      ),
+      child: InkWell(
+        onTap:
+            () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => HotelDetailPage(hotel: hotel)),
+            ),
+        borderRadius: BorderRadius.circular(20),
+        child: Column(
+          children: [
+            Stack(
+              children: [
+                ClipRRect(
+                  borderRadius: const BorderRadius.vertical(
+                    top: Radius.circular(20),
+                  ),
+                  child: Image.network(
+                    hotel.thumbnailUrl ?? '',
+                    height: 180,
+                    width: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder:
+                        (_, __, ___) => Container(
+                          color: Colors.grey[200],
+                          height: 180,
+                          child: const Icon(Icons.hotel),
+                        ),
+                  ),
+                ),
+                Positioned(
+                  top: 12,
+                  right: 12,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.star, color: Colors.amber, size: 16),
+                        const SizedBox(width: 4),
+                        Text(
+                          hotel.starRating.toString(),
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          hotel.name,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      Text(
+                        '\$200',
+                        style: TextStyle(
+                          color: primaryColor,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.location_on,
+                        size: 14,
+                        color: Colors.grey[500],
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          '${hotel.city}, ${hotel.address}',
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 13,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      _buildAmenity(Icons.wifi, "Free Wifi"),
+                      const SizedBox(width: 12),
+                      _buildAmenity(Icons.pool, "Pool"),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );

@@ -1,400 +1,214 @@
+import 'package:booking_app/src/core/module/auth/presentation/pages/sign_in_page.dart';
+import 'package:booking_app/src/core/module/bookings/presentation/pages/bookings_page.dart';
+import 'package:booking_app/src/core/module/favorites/presentation/pages/favorites_page.dart';
+import 'package:booking_app/src/core/module/profile/data/user_profile_model.dart';
+import 'package:booking_app/src/core/module/profile/domain/entities/profile_entity.dart';
+import 'package:booking_app/src/core/module/profile/presentation/pages/edit_profile_page.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 
+import '../cubit/profile_cubit.dart';
+import '../cubit/profile_state.dart';
+import '../widgets/profile_header.dart';
+import '../widgets/profile_stats.dart';
+import '../widgets/profile_info_card.dart';
+import '../widgets/profile_menu_item.dart';
 import '../../../../supabase/supabase_manager.dart';
-import '../../../bookings/data/booking_api.dart';
-import '../../../favorites/data/favorite_api.dart';
-import '../../../auth/presentation/pages/sign_in_page.dart';
-import '../../data/profile_api.dart';
-import '../../data/user_profile_model.dart';
-import 'edit_profile_page.dart';
 
-class ProfilePage extends StatefulWidget {
+class ProfilePage extends StatelessWidget {
   final String email;
-
   const ProfilePage({super.key, required this.email});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  Widget build(BuildContext context) {
+    return BlocProvider(
+      create: (context) => ProfileCubit()..loadProfile(email),
+      child: const ProfileView(),
+    );
+  }
 }
 
-class _ProfilePageState extends State<ProfilePage> {
-  final _bookingApi = BookingApi();
-  final _favoriteApi = FavoriteApi();
-  final _profileApi = ProfileApi();
-  final _dateFormat = DateFormat('dd/MM/yyyy');
-
-  bool _loadingStats = true;
-  int _bookingCount = 0;
-  int _favoriteCount = 0;
-
-  bool _loadingProfile = true;
-  String _fullName = '';
-  UserProfileModel? _profile;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadAll();
-  }
-
-  Future<void> _loadAll() async {
-    await Future.wait([_loadProfileInfo(), _loadStats()]);
-  }
-
-  Future<void> _loadStats() async {
-    try {
-      final bookingCount = await _bookingApi.getMyBookingCount();
-      final favoriteCount = await _favoriteApi.getMyFavoriteCount();
-
-      if (!mounted) return;
-      setState(() {
-        _bookingCount = bookingCount;
-        _favoriteCount = favoriteCount;
-        _loadingStats = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _loadingStats = false;
-      });
-    }
-  }
-
-  Future<void> _loadProfileInfo() async {
-    final client = SupabaseManager.client;
-    final user = client.auth.currentUser;
-
-    final fullNameMeta = (user?.userMetadata?['full_name'] as String?) ?? '';
-
-    try {
-      final profile = await _profileApi.getMyProfile();
-
-      if (!mounted) return;
-      setState(() {
-        _profile = profile;
-        _fullName = profile?.fullName ?? fullNameMeta;
-        _loadingProfile = false;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _fullName = fullNameMeta;
-        _loadingProfile = false;
-      });
-    }
-  }
-
-  Future<void> _signOut() async {
-    await SupabaseManager.client.auth.signOut();
-    if (!mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const SignInPage()),
-      (route) => false,
-    );
-  }
-
-  Future<void> _onEditProfile() async {
-    final result = await Navigator.of(context).push<bool>(
-      MaterialPageRoute(
-        builder:
-            (_) => EditProfilePage(
-              initialEmail: widget.email,
-              initialFullName: _fullName,
-              initialProfile: _profile,
-            ),
-      ),
-    );
-
-    if (result == true) {
-      // reload lại info & stats
-      _loadProfileInfo();
-      _loadStats();
-    }
-  }
-
-  String _getInitials() {
-    final sourceName =
-        _fullName.trim().isNotEmpty ? _fullName.trim() : widget.email;
-    if (sourceName.isEmpty) return '?';
-
-    final parts = sourceName.split(' ');
-    if (parts.length == 1) {
-      return parts.first[0].toUpperCase();
-    }
-    return (parts.first[0] + parts.last[0]).toUpperCase();
-  }
-
-  String _formatDob(DateTime? d) {
-    if (d == null) return 'Not set';
-    return _dateFormat.format(d.toLocal());
-  }
+class ProfileView extends StatelessWidget {
+  const ProfileView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final nameToShow = _fullName.trim().isNotEmpty ? _fullName.trim() : 'Guest';
-    final phone = _profile?.phoneNumber ?? 'Not set';
-    final address = _profile?.address ?? 'Not set';
-    final dobText = _formatDob(_profile?.dateOfBirth);
-
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Profile'),
-        actions: [
-          IconButton(
-            onPressed: _onEditProfile,
-            icon: const Icon(Icons.edit),
-            tooltip: 'Edit profile',
-          ),
-        ],
-      ),
-      body: RefreshIndicator(
-        onRefresh: _loadAll,
-        child: SingleChildScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
+      backgroundColor: const Color(0xFFF8F9FE),
+      body: BlocBuilder<ProfileCubit, ProfileState>(
+        builder: (context, state) {
+          return Stack(
             children: [
-              // Avatar + name + email
-              if (_loadingProfile)
-                const CircleAvatar(
-                  radius: 36,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              else ...[
-                if (_profile?.avatarUrl != null &&
-                    _profile!.avatarUrl!.isNotEmpty)
-                  CircleAvatar(
-                    radius: 36,
-                    backgroundImage: NetworkImage(_profile!.avatarUrl!),
-                  )
-                else
-                  CircleAvatar(
-                    radius: 36,
-                    child: Text(
-                      _getInitials(),
-                      style: const TextStyle(fontSize: 24),
-                    ),
-                  ),
-                const SizedBox(height: 12),
-                Text(
-                  nameToShow,
-                  style: theme.textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  widget.email,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.grey[700],
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 24),
-
-              // Stats
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Overview',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              if (_loadingStats)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 16.0),
-                  child: CircularProgressIndicator(),
-                )
-              else
-                Row(
-                  children: [
-                    Expanded(
-                      child: _StatCard(
-                        label: 'Bookings',
-                        value: _bookingCount.toString(),
-                        icon: Icons.book_online_outlined,
+              _buildBackgroundImage(),
+              SafeArea(
+                child: RefreshIndicator(
+                  onRefresh:
+                      () => context.read<ProfileCubit>().loadProfile(
+                        (state is ProfileLoaded) ? state.profile.email : "",
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _StatCard(
-                        label: 'Favorites',
-                        value: _favoriteCount.toString(),
-                        icon: Icons.favorite_border,
-                      ),
-                    ),
-                  ],
+                  child: _buildBody(context, state),
                 ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 
-              const SizedBox(height: 32),
+  Widget _buildBody(BuildContext context, ProfileState state) {
+    if (state is ProfileLoading) {
+      return const Center(child: CircularProgressIndicator());
+    } else if (state is ProfileLoaded) {
+      final profile = state.profile;
+      final dateFormat = DateFormat('dd/MM/yyyy');
 
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Personal info',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          children: [
+            const SizedBox(height: 30),
+            ProfileHeader(
+              fullName: profile.fullName,
+              email: profile.email,
+              avatarUrl: profile.avatarUrl,
+              initials: _getInitials(profile.fullName, profile.email),
+              onEditTap: () => _onEdit(context, profile),
+            ),
+            const SizedBox(height: 30),
+            ProfileStats(
+              bookingCount: state.bookingCount,
+              favoriteCount: state.favoriteCount,
+              onBookingTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const BookingsPage()),
+                );
+              },
+              onFavoriteTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const FavoritesPage(),
                   ),
-                ),
-              ),
-              const SizedBox(height: 12),
+                );
+              },
+            ),
+            const SizedBox(height: 24),
+            ProfileInfoCard(
+              phoneNumber: profile.phoneNumber ?? 'Not set',
+              dob:
+                  profile.dateOfBirth != null
+                      ? dateFormat.format(profile.dateOfBirth!)
+                      : 'Not set',
+              address: profile.address ?? 'Not set',
+            ),
+            const SizedBox(height: 24),
+            _buildSettingsSection(context, profile.email),
+            const SizedBox(height: 40),
+          ],
+        ),
+      );
+    } else if (state is ProfileError) {
+      return Center(child: Text(state.message));
+    }
+    return const SizedBox.shrink();
+  }
 
-              _InfoTile(
-                icon: Icons.phone_android_outlined,
-                label: 'Phone',
-                value: phone,
-              ),
-              const SizedBox(height: 8),
-              _InfoTile(
-                icon: Icons.cake_outlined,
-                label: 'Date of birth',
-                value: dobText,
-              ),
-              const SizedBox(height: 8),
-              _InfoTile(
-                icon: Icons.home_outlined,
-                label: 'Address',
-                value: address,
-              ),
-
-              const SizedBox(height: 32),
-
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Account',
-                  style: theme.textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              ListTile(
-                leading: const Icon(Icons.email_outlined),
-                title: const Text('Email'),
-                subtitle: Text(widget.email),
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.logout, color: Colors.redAccent),
-                title: const Text(
-                  'Sign out',
-                  style: TextStyle(color: Colors.redAccent),
-                ),
-                onTap: _signOut,
-              ),
+  Widget _buildBackgroundImage() {
+    return Container(
+      height: 260,
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/hotel_bg.jpg'),
+          fit: BoxFit.cover,
+        ),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withOpacity(0.2),
+              Colors.black.withOpacity(0.6),
             ],
           ),
         ),
       ),
     );
   }
-}
 
-class _StatCard extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-
-  const _StatCard({
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        color: Theme.of(context).cardColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 4),
+  Widget _buildSettingsSection(BuildContext context, String email) {
+    return Column(
+      children: [
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            'Settings',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 24),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                value,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                label,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: Colors.grey[700],
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
+        ),
+        const SizedBox(height: 12),
+        ProfileMenuItem(
+          icon: Icons.email_outlined,
+          title: 'Email',
+          trailing: email,
+          onTap: () {},
+        ),
+        const SizedBox(height: 12),
+        ProfileMenuItem(
+          icon: Icons.logout_rounded,
+          title: 'Sign Out',
+          isDestructive: true,
+          onTap: () => _signOut(context),
+        ),
+      ],
     );
   }
-}
 
-class _InfoTile extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
+  // --- Logic Helpers ---
 
-  const _InfoTile({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
+  String _getInitials(String name, String email) {
+    final source = name.isNotEmpty ? name : email;
+    final parts = source.trim().split(' ');
+    if (parts.length == 1) return parts.first[0].toUpperCase();
+    return (parts.first[0] + parts.last[0]).toUpperCase();
+  }
 
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 22),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: Colors.grey[700],
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(value, style: theme.textTheme.bodyMedium),
-              ],
+  void _signOut(BuildContext context) async {
+    await SupabaseManager.client.auth.signOut();
+    if (!context.mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const SignInPage()),
+      (route) => false,
+    );
+  }
+
+  void _onEdit(BuildContext context, ProfileEntity profile) async {
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder:
+            (_) => EditProfilePage(
+              initialEmail: profile.email,
+              initialFullName: profile.fullName,
+
+              initialProfile: UserProfileModel(
+                fullName: profile.fullName,
+                phoneNumber: profile.phoneNumber,
+                address: profile.address,
+                avatarUrl: profile.avatarUrl,
+                dateOfBirth: profile.dateOfBirth,
+                userId: '',
+              ),
             ),
-          ),
-        ],
       ),
     );
+
+    if (result == true && context.mounted) {
+      context.read<ProfileCubit>().loadProfile(profile.email);
+    }
   }
 }

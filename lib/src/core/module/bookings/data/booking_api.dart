@@ -1,7 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../supabase/supabase_manager.dart';
-import '../../hotel/data/models/hotel_model.dart';
 import 'models/booking_model.dart';
 
 class BookingApi {
@@ -13,10 +12,11 @@ class BookingApi {
     return id;
   }
 
-  /// Tạo booking mới
+  /// 🔥 CREATE BOOKING (CLEAN VERSION)
   Future<BookingModel> createBooking({
-    required HotelModel hotel,
-    required RoomTypeModel roomType,
+    required String hotelId,
+    required String roomTypeId,
+    required double pricePerNight,
     required DateTime checkIn,
     required DateTime checkOut,
     required int guestsAdults,
@@ -24,22 +24,23 @@ class BookingApi {
     String? note,
   }) async {
     final nights = checkOut.difference(checkIn).inDays;
-    if (nights <= 0)
+    if (nights <= 0) {
       throw Exception('Check-out phải sau check-in ít nhất 1 ngày');
+    }
 
-    final totalPrice = roomType.pricePerNight * nights;
+    final totalPrice = pricePerNight * nights;
 
     final data =
         await _client
             .from('bookings')
             .insert({
               'user_id': _userId,
-              'hotel_id': hotel.id,
-              'room_type_id': roomType.id,
+              'hotel_id': hotelId,
+              'room_type_id': roomTypeId,
               'check_in': checkIn.toIso8601String().split('T').first,
               'check_out': checkOut.toIso8601String().split('T').first,
               'total_price': totalPrice,
-              'status': 'pending', // ✅ chờ admin confirm
+              'status': 'pending',
               'payment_status': 'pending',
               'guests_adults': guestsAdults,
               'guests_children': guestsChildren,
@@ -55,14 +56,14 @@ class BookingApi {
     return BookingModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Lấy danh sách booking của current user
+  /// GET BOOKINGS
   Future<List<BookingModel>> getMyBookings() async {
     final data = await _client
         .from('bookings')
         .select(
           'id, user_id, hotel_id, check_in, check_out, total_price, status, payment_status, '
           'guests_adults, guests_children, payment_method, paid_at, '
-          'hotels(name, city), room_types(name)',
+          'hotels(name, city), room_types(name,image_url,room_type_amenities(amenities(name)))',
         )
         .eq('user_id', _userId)
         .order('created_at', ascending: false);
@@ -72,30 +73,27 @@ class BookingApi {
         .toList();
   }
 
-  /// Cancel booking: chỉ cho pending/confirmed (tuỳ rule bạn muốn)
+  /// CANCEL
   Future<void> cancelBooking(String bookingId) async {
     await _client
         .from('bookings')
         .update({'status': 'cancelled'})
         .eq('id', bookingId)
         .eq('user_id', _userId)
-        .or(
-          'status.eq.pending,status.eq.confirmed',
-        ); // ✅ chặn cancel done/cancelled
+        .or('status.eq.pending,status.eq.confirmed');
   }
 
-  /// Mark done: CHỈ cho confirmed -> done
+  /// DONE
   Future<void> markBookingDone(String bookingId) async {
     await _client
         .from('bookings')
         .update({'status': 'done'})
         .eq('id', bookingId)
         .eq('user_id', _userId)
-        .eq('status', 'confirmed'); // ✅ chặn pending -> done
+        .eq('status', 'confirmed');
   }
 
-  /// (Admin) Confirm booking: pending -> confirmed
-  /// Lưu ý: cái này cần RLS/policy cho admin hoặc dùng service_role ở backend.
+  /// ADMIN CONFIRM
   Future<void> adminConfirmBooking({required String bookingId}) async {
     await _client
         .from('bookings')
@@ -112,7 +110,6 @@ class BookingApi {
     return (data as List).length;
   }
 
-  /// User đã có booking DONE cho hotel này hay chưa (review)
   Future<bool> hasBookingForHotel(String hotelId) async {
     final data = await _client
         .from('bookings')

@@ -1,11 +1,14 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 
-import '../../data/profile_api.dart';
+import '../cubit/edit_profile_cubit.dart';
+import '../cubit/edit_profile_state.dart';
 import '../../data/user_profile_model.dart';
+import '../widgets/edit_avatar_section.dart';
+import '../widgets/modern_text_field.dart';
+import '../widgets/modern_date_picker.dart';
 
 class EditProfilePage extends StatefulWidget {
   final UserProfileModel? initialProfile;
@@ -24,19 +27,12 @@ class EditProfilePage extends StatefulWidget {
 }
 
 class _EditProfilePageState extends State<EditProfilePage> {
-  final _api = ProfileApi();
-  final _formKey = GlobalKey<FormState>();
-  final _dateFormat = DateFormat('dd/MM/yyyy');
-  final _picker = ImagePicker();
-
-  late TextEditingController _fullNameController;
-  late TextEditingController _phoneController;
-  late TextEditingController _addressController;
+  late final TextEditingController _fullNameController;
+  late final TextEditingController _phoneController;
+  late final TextEditingController _addressController;
   DateTime? _dob;
-  bool _saving = false;
-
-  String? _currentAvatarUrl;
   XFile? _newAvatarFile;
+  final _formKey = GlobalKey<FormState>();
 
   @override
   void initState() {
@@ -48,242 +44,144 @@ class _EditProfilePageState extends State<EditProfilePage> {
     _phoneController = TextEditingController(text: p?.phoneNumber ?? '');
     _addressController = TextEditingController(text: p?.address ?? '');
     _dob = p?.dateOfBirth;
-    _currentAvatarUrl = p?.avatarUrl;
-  }
-
-  @override
-  void dispose() {
-    _fullNameController.dispose();
-    _phoneController.dispose();
-    _addressController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _pickDob() async {
-    final now = DateTime.now();
-    final initial = _dob ?? DateTime(now.year - 20, now.month, now.day);
-
-    final picked = await showDatePicker(
-      context: context,
-      initialDate: initial,
-      firstDate: DateTime(1900),
-      lastDate: now,
-    );
-    if (picked != null) {
-      setState(() {
-        _dob = picked;
-      });
-    }
-  }
-
-  Future<void> _pickAvatar() async {
-    final file = await _picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 800,
-      imageQuality: 80,
-    );
-    if (file != null) {
-      setState(() {
-        _newAvatarFile = file;
-      });
-    }
-  }
-
-  Future<void> _onSave() async {
-    if (!_formKey.currentState!.validate()) return;
-
-    setState(() => _saving = true);
-
-    String? avatarUrl = _currentAvatarUrl;
-
-    try {
-      // Nếu user chọn avatar mới -> upload lên Supabase
-      if (_newAvatarFile != null) {
-        final bytes = await _newAvatarFile!.readAsBytes();
-        final ext = _newAvatarFile!.name.split('.').last.toLowerCase();
-        avatarUrl = await _api.uploadAvatar(bytes, ext);
-      }
-
-      await _api.upsertMyProfile(
-        fullName: _fullNameController.text.trim(),
-        phoneNumber:
-            _phoneController.text.trim().isEmpty
-                ? null
-                : _phoneController.text.trim(),
-        dateOfBirth: _dob,
-        address:
-            _addressController.text.trim().isEmpty
-                ? null
-                : _addressController.text.trim(),
-        avatarUrl: avatarUrl,
-      );
-
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cập nhật profile thành công')),
-      );
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi cập nhật profile: $e')));
-    } finally {
-      if (mounted) setState(() => _saving = false);
-    }
-  }
-
-  String _formatDob(DateTime? d) {
-    if (d == null) return 'Not set';
-    return _dateFormat.format(d.toLocal());
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    return BlocProvider(
+      create: (context) => EditProfileCubit(),
+      child: BlocListener<EditProfileCubit, EditProfileState>(
+        listener: (context, state) {
+          if (state is EditProfileSuccess) {
+            Navigator.pop(context, true);
+          } else if (state is EditProfileError) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(state.message),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
+        },
+        child: _buildScaffold(context),
+      ),
+    );
+  }
 
-    // Quyết định ảnh avatar dùng gì:
-    ImageProvider? avatarImage;
-    if (_newAvatarFile != null) {
-      // Preview ảnh mới chọn từ gallery
-      avatarImage = FileImage(File(_newAvatarFile!.path));
-    } else if (_currentAvatarUrl != null && _currentAvatarUrl!.isNotEmpty) {
-      // Nếu chưa chọn mới, dùng ảnh từ server
-      avatarImage = NetworkImage(_currentAvatarUrl!);
-    }
-
+  Widget _buildScaffold(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Edit profile')),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      backgroundColor: const Color(0xFFF8F9FE),
+      appBar: AppBar(title: const Text('Edit Profile'), centerTitle: true),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.symmetric(horizontal: 24),
         child: Form(
           key: _formKey,
-          child: ListView(
+          child: Column(
             children: [
-              Center(
-                child: Stack(
-                  children: [
-                    CircleAvatar(
-                      radius: 40,
-                      backgroundImage: avatarImage,
-                      child:
-                          avatarImage == null
-                              ? const Icon(Icons.person, size: 40)
-                              : null,
-                    ),
-                    Positioned(
-                      bottom: 0,
-                      right: 0,
-                      child: InkWell(
-                        onTap: _pickAvatar,
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primary,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.camera_alt,
-                            size: 18,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              Text(
-                'Personal information',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                controller: _fullNameController,
-                decoration: const InputDecoration(
-                  labelText: 'Full name',
-                  border: OutlineInputBorder(),
-                ),
-                validator: (value) {
-                  if (value == null || value.trim().isEmpty) {
-                    return 'Full name is required';
-                  }
-                  return null;
+              const SizedBox(height: 20),
+              StatefulBuilder(
+                builder: (context, setLocalState) {
+                  return EditAvatarSection(
+                    currentAvatarUrl: widget.initialProfile?.avatarUrl,
+                    newAvatarFile: _newAvatarFile,
+                    onPickImage: () async {
+                      final file = await ImagePicker().pickImage(
+                        source: ImageSource.gallery,
+                      );
+                      if (file != null)
+                        setLocalState(() => _newAvatarFile = file);
+                    },
+                  );
                 },
               ),
-              const SizedBox(height: 12),
-
-              TextFormField(
-                enabled: false,
-                initialValue: widget.initialEmail,
-                decoration: const InputDecoration(
-                  labelText: 'Email',
-                  border: OutlineInputBorder(),
-                ),
+              const SizedBox(height: 40),
+              ModernTextField(
+                label: 'Full Name',
+                controller: _fullNameController,
+                icon: Icons.person,
               ),
-              const SizedBox(height: 12),
-
-              TextFormField(
+              const SizedBox(height: 20),
+              ModernTextField(
+                label: 'Email',
+                initialValue: widget.initialEmail,
+                icon: Icons.email,
+                enabled: false,
+              ),
+              const SizedBox(height: 20),
+              ModernTextField(
+                label: 'Phone',
                 controller: _phoneController,
-                decoration: const InputDecoration(
-                  labelText: 'Phone number',
-                  border: OutlineInputBorder(),
-                ),
+                icon: Icons.phone,
                 keyboardType: TextInputType.phone,
               ),
-              const SizedBox(height: 12),
-
-              GestureDetector(
-                onTap: _pickDob,
-                child: InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: 'Date of birth',
-                    border: OutlineInputBorder(),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(_formatDob(_dob)),
-                      const Icon(Icons.calendar_today, size: 18),
-                    ],
-                  ),
-                ),
+              const SizedBox(height: 20),
+              StatefulBuilder(
+                builder: (context, setLocalState) {
+                  return ModernDatePicker(
+                    label: 'Birthday',
+                    selectedDate: _dob,
+                    formattedDate:
+                        _dob != null
+                            ? DateFormat('dd/MM/yyyy').format(_dob!)
+                            : '',
+                    onTap: () async {
+                      final picked = await showDatePicker(
+                        context: context,
+                        initialDate: _dob ?? DateTime.now(),
+                        firstDate: DateTime(1900),
+                        lastDate: DateTime.now(),
+                      );
+                      if (picked != null) setLocalState(() => _dob = picked);
+                    },
+                  );
+                },
               ),
-              const SizedBox(height: 12),
-
-              TextFormField(
+              const SizedBox(height: 20),
+              ModernTextField(
+                label: 'Address',
                 controller: _addressController,
-                decoration: const InputDecoration(
-                  labelText: 'Address',
-                  border: OutlineInputBorder(),
-                ),
+                icon: Icons.location_on,
                 maxLines: 2,
               ),
-              const SizedBox(height: 24),
-
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _saving ? null : _onSave,
-                  child:
-                      _saving
-                          ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                          : const Text('Save'),
-                ),
-              ),
+              const SizedBox(height: 40),
+              _buildSaveButton(),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildSaveButton() {
+    return BlocBuilder<EditProfileCubit, EditProfileState>(
+      builder: (context, state) {
+        final isLoading = state is EditProfileSaving;
+        return SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton(
+            onPressed:
+                isLoading
+                    ? null
+                    : () {
+                      if (_formKey.currentState!.validate()) {
+                        context.read<EditProfileCubit>().updateProfile(
+                          fullName: _fullNameController.text.trim(),
+                          phoneNumber: _phoneController.text.trim(),
+                          dob: _dob,
+                          address: _addressController.text.trim(),
+                          currentAvatarUrl: widget.initialProfile?.avatarUrl,
+                          newAvatarFile: _newAvatarFile,
+                        );
+                      }
+                    },
+            child:
+                isLoading
+                    ? const CircularProgressIndicator(color: Colors.white)
+                    : const Text('Save Changes'),
+          ),
+        );
+      },
     );
   }
 }

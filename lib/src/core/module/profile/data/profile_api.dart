@@ -16,7 +16,6 @@ class ProfileApi {
     return id;
   }
 
-  /// Lấy profile của current user. Có thể trả về null nếu chưa có record.
   Future<UserProfileModel?> getMyProfile() async {
     final data =
         await _client
@@ -29,7 +28,6 @@ class ProfileApi {
     return UserProfileModel.fromJson(data as Map<String, dynamic>);
   }
 
-  /// Upload avatar lên bucket 'avatars' và trả về public URL
   Future<String> uploadAvatar(Uint8List bytes, String fileExt) async {
     final filePath =
         '$_userId/avatar_${DateTime.now().millisecondsSinceEpoch}.$fileExt';
@@ -41,7 +39,7 @@ class ProfileApi {
           bytes,
           fileOptions: const FileOptions(
             upsert: true,
-            contentType: 'image/png', // hoặc image/jpeg, không quá quan trọng
+            contentType: 'image/png',
           ),
         );
 
@@ -49,7 +47,6 @@ class ProfileApi {
     return publicUrl;
   }
 
-  /// Tạo/Update profile (upsert theo user_id)
   Future<UserProfileModel> upsertMyProfile({
     String? fullName,
     String? phoneNumber,
@@ -80,14 +77,12 @@ class ProfileApi {
             .select('*')
             .single();
 
-    // Sync full_name sang user_metadata cho đẹp
     if (fullName != null && fullName.trim().isNotEmpty) {
       try {
         await _client.auth.updateUser(
           UserAttributes(data: {'full_name': fullName.trim()}),
         );
       } catch (_) {
-        // ignore if metadata update fails
       }
     }
 
