@@ -1,9 +1,7 @@
 import 'package:booking_app/src/core/module/auth/presentation/pages/widget/textFieldWidget.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-// import 'package:ui_kit/supabase/supabase_manager.dart'; // Đảm bảo đúng path
-
-// --- CÁC IMPORT CŨ CỦA BẠN (GIỮ NGUYÊN) ---
+import 'package:shared_preferences/shared_preferences.dart'; 
 import '../../../../supabase/supabase_manager.dart';
 import '../../../home/presentation/pages/main_shell_page.dart';
 import '../../../admin/presentation/pages/admin_home_page.dart';
@@ -23,29 +21,74 @@ class _SignInPageState extends State<SignInPage> {
   final _passwordController = TextEditingController();
   bool _loading = false;
   bool _obscureText = true;
+  bool _rememberMe = false; // Thêm biến này
 
   @override
-  void dispose() {
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _checkRememberMe(); // Kiểm tra trạng thái lưu khi mở app
   }
 
-  // --- LOGIC SUPABASE CỦA BẠN (GIỮ NGUYÊN) ---
-  Future<void> _onSignIn() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _loading = true);
+  // Hàm kiểm tra xem đã lưu thông tin đăng nhập chưa
+  Future<void> _checkRememberMe() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rememberMe = prefs.getBool('remember_me') ?? false;
+
+    if (rememberMe) {
+      // Nếu đã bật "Ghi nhớ", tự động đăng nhập
+      final email = prefs.getString('user_email') ?? '';
+      final password = prefs.getString('user_password') ?? '';
+
+      if (email.isNotEmpty && password.isNotEmpty) {
+        _emailController.text = email;
+        _passwordController.text = password;
+        _rememberMe = true;
+        // Tự động đăng nhập
+        await _onSignIn(autoLogin: true);
+      }
+    }
+  }
+
+  // --- LOGIC ĐĂNG NHẬP CẬP NHẬT ---
+  Future<void> _onSignIn({bool autoLogin = false}) async {
+    if (!autoLogin && !_formKey.currentState!.validate()) return;
+
+    if (!autoLogin) setState(() => _loading = true);
+
     try {
       final client = SupabaseManager.client;
       final response = await client.auth.signInWithPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text,
       );
+
       final user = response.user;
       if (user == null) throw Exception('Không nhận được thông tin user');
+
       final email = user.email ?? '';
-      final admin = isAdminEmail(email);
+
+      // LƯU THÔNG TIN NẾU BẬT REMEMBER ME
+      final prefs = await SharedPreferences.getInstance();
+      if (_rememberMe) {
+        await prefs.setBool('remember_me', true);
+        await prefs.setString('user_email', _emailController.text.trim());
+        await prefs.setString('user_password', _passwordController.text);
+      } else {
+        // Xóa thông tin nếu không bật remember me
+        await prefs.remove('remember_me');
+        await prefs.remove('user_email');
+        await prefs.remove('user_password');
+      }
+
+      // LƯU SESSION ID (cách khác: dùng supabase tự động lưu session)
+      await prefs.setString(
+        'user_session',
+        response.session?.accessToken ?? '',
+      );
+
       if (!mounted) return;
+
+      final admin = isAdminEmail(email);
       if (admin) {
         Navigator.of(context).pushAndRemoveUntil(
           MaterialPageRoute(builder: (_) => AdminHomePage(email: email)),
@@ -58,63 +101,58 @@ class _SignInPageState extends State<SignInPage> {
         );
       }
     } on AuthException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.message), behavior: SnackBarBehavior.floating),
-      );
+      if (!autoLogin && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(e.message),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi đăng nhập: $e')));
+      if (!autoLogin && mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Lỗi đăng nhập: $e')));
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (!autoLogin && mounted) setState(() => _loading = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    // Với Hotel App, màu chính thường là Nâu đất, Vàng kim nhạt, hoặc Xanh Teal sang trọng.
-    // Giả sử màu primary của bạn là xanh Teal:
     final primaryColor = Colors.teal;
 
     return Scaffold(
       body: Stack(
         children: [
-          // 1. LỚP NỀN: HÌNH ẢNH KHÁCH SẠN
+          // ... (phần background giữ nguyên) ...
           Container(
             decoration: const BoxDecoration(
               image: DecorationImage(
-                image: AssetImage(
-                  'assets/images/hotel_bg.jpg',
-                ), // Path tới ảnh của bạn
+                image: AssetImage('assets/images/hotel_bg.jpg'),
                 fit: BoxFit.cover,
               ),
             ),
           ),
-
-          // 2. LỚP PHỦ (OVERLAY): Giúp Form nổi bật và dễ đọc
           Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 begin: Alignment.topCenter,
                 end: Alignment.bottomCenter,
                 colors: [
-                  Colors.black.withOpacity(0.2), // Trên mờ nhẹ
-                  Colors.black.withOpacity(
-                    0.7,
-                  ), // Dưới mờ đậm hơn để nổi bật form trắng
+                  Colors.black.withOpacity(0.2),
+                  Colors.black.withOpacity(0.7),
                 ],
               ),
             ),
           ),
 
-          // 3. LỚP NỘI DUNG (NÊN SỬ DỤNG PANEL TRẮNG PHÍA DƯỚI)
           SafeArea(
             child: Column(
               children: [
-                // Phần trên: Logo hoặc Slogan nhạt
                 const SizedBox(height: 40),
                 Center(
                   child: Icon(
@@ -133,8 +171,7 @@ class _SignInPageState extends State<SignInPage> {
                     letterSpacing: 1.2,
                   ),
                 ),
-                const Spacer(), // Đẩy form xuống dưới
-                // Phần dưới: Form đăng nhập (Nên dùng panel trắng để tương phản)
+                const Spacer(),
                 Container(
                   padding: const EdgeInsets.all(24),
                   decoration: const BoxDecoration(
@@ -158,7 +195,6 @@ class _SignInPageState extends State<SignInPage> {
                         ),
                         const SizedBox(height: 24),
 
-                        // Email Field (Sử dụng hàm build đã sạch ở câu trước)
                         CustomTextField(
                           controller: _emailController,
                           label: 'Email Address',
@@ -174,7 +210,6 @@ class _SignInPageState extends State<SignInPage> {
                         ),
                         const SizedBox(height: 20),
 
-                        // Password Field
                         CustomTextField(
                           controller: _passwordController,
                           label: 'Password',
@@ -192,21 +227,40 @@ class _SignInPageState extends State<SignInPage> {
                           },
                         ),
 
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: TextButton(
-                            onPressed: () {},
-                            child: const Text('Quên mật khẩu?'),
-                          ),
+                        // THÊM CHECKBOX REMEMBER ME
+                        Row(
+                          children: [
+                            Checkbox(
+                              value: _rememberMe,
+                              onChanged: (value) {
+                                setState(() {
+                                  _rememberMe = value ?? false;
+                                });
+                              },
+                              activeColor: primaryColor,
+                            ),
+                            const Text(
+                              'Ghi nhớ đăng nhập',
+                              style: TextStyle(fontSize: 14),
+                            ),
+                            const Spacer(),
+                            TextButton(
+                              onPressed: () {},
+                              child: const Text('Quên mật khẩu?'),
+                            ),
+                          ],
                         ),
+
                         const SizedBox(height: 24),
 
-                        // Login Button (Dùng màu Teal sang trọng)
                         SizedBox(
                           width: double.infinity,
                           height: 56,
                           child: ElevatedButton(
-                            onPressed: _loading ? null : _onSignIn,
+                            onPressed:
+                                _loading
+                                    ? null
+                                    : () => _onSignIn(autoLogin: false),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: primaryColor,
                               foregroundColor: Colors.white,
@@ -253,7 +307,7 @@ class _SignInPageState extends State<SignInPage> {
                             ),
                           ],
                         ),
-                        const SizedBox(height: 16), // Thêm chút space ở dưới
+                        const SizedBox(height: 16),
                       ],
                     ),
                   ),

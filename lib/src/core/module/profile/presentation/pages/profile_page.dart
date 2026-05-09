@@ -7,6 +7,7 @@ import 'package:booking_app/src/core/module/profile/presentation/pages/edit_prof
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../cubit/profile_cubit.dart';
 import '../cubit/profile_state.dart';
@@ -163,7 +164,7 @@ class ProfileView extends StatelessWidget {
           icon: Icons.logout_rounded,
           title: 'Sign Out',
           isDestructive: true,
-          onTap: () => _signOut(context),
+          onTap: () => _logout(context),
         ),
       ],
     );
@@ -178,9 +179,17 @@ class ProfileView extends StatelessWidget {
     return (parts.first[0] + parts.last[0]).toUpperCase();
   }
 
-  void _signOut(BuildContext context) async {
+  Future<void> _logout(BuildContext context) async {
     await SupabaseManager.client.auth.signOut();
-    if (!context.mounted) return;
+
+    // Xóa thông tin đã lưu
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('remember_me');
+    await prefs.remove('user_email');
+    await prefs.remove('user_password');
+    await prefs.remove('user_session');
+
+    // Chuyển về màn hình đăng nhập
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const SignInPage()),
       (route) => false,

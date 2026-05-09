@@ -6,14 +6,21 @@ class ChatbotState {
   final Map<String, dynamic> botContext;
   final int guests;
 
+  /// Văn bản đang stream từng chữ từ bot (chưa hoàn thành).
+  /// Khi stream kết thúc sẽ được flush vào [messages] và reset về ''.
+  final String streamingText;
+
   ChatbotState({
     this.messages = const [],
     this.isSending = false,
     this.botContext = const {},
     this.guests = 2,
+    this.streamingText = '',
   });
 
-  // Chuyển logic định dạng tiền từ UI vào State
+  /// Bot đang stream khi [streamingText] không rỗng
+  bool get isStreaming => streamingText.isNotEmpty;
+
   String formatVnd(dynamic v) {
     final n = (v is num) ? v.toDouble() : double.tryParse(v.toString());
     if (n == null) return '';
@@ -26,12 +33,14 @@ class ChatbotState {
     bool? isSending,
     Map<String, dynamic>? botContext,
     int? guests,
+    String? streamingText,
   }) {
     return ChatbotState(
       messages: messages ?? this.messages,
       isSending: isSending ?? this.isSending,
       botContext: botContext ?? this.botContext,
       guests: guests ?? this.guests,
+      streamingText: streamingText ?? this.streamingText,
     );
   }
 }

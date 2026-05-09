@@ -1,6 +1,7 @@
 // lib/src/core/module/admin/presentation/pages/admin_profile_page.dart
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../supabase/supabase_manager.dart';
 import '../../../auth/presentation/pages/sign_in_page.dart';
@@ -11,17 +12,21 @@ class AdminProfilePage extends StatelessWidget {
   const AdminProfilePage({super.key, required this.email});
 
   Future<void> _logout(BuildContext context) async {
-    try {
-      await SupabaseManager.client.auth.signOut();
-    } catch (_) {
-      // ignore
-    }
-    if (!context.mounted) return;
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const SignInPage()),
-      (route) => false,
-    );
-  }
+  await SupabaseManager.client.auth.signOut();
+  
+  // Xóa thông tin đã lưu
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.remove('remember_me');
+  await prefs.remove('user_email');
+  await prefs.remove('user_password');
+  await prefs.remove('user_session');
+  
+  // Chuyển về màn hình đăng nhập
+  Navigator.of(context).pushAndRemoveUntil(
+    MaterialPageRoute(builder: (_) => const SignInPage()),
+    (route) => false,
+  );
+}
 
   @override
   Widget build(BuildContext context) {

@@ -1,7 +1,13 @@
+// pubspec.yaml dependencies cần thêm:
+//   flutter_markdown: ^0.7.4
+//   http: ^1.2.0  (nếu chưa có)
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import '../../domain/entities/chat_message_entity.dart';
 import '../cubit/chatbot_cubit.dart';
 import '../cubit/chatbot_state.dart';
@@ -17,10 +23,10 @@ class _ChatbotPageState extends State<ChatbotPage>
     with TickerProviderStateMixin {
   final _controller = TextEditingController();
   final _scrollController = ScrollController();
-  late AnimationController _typingAnimController;
+  late AnimationController _dotAnimController;
   bool _showScrollFab = false;
 
-  // ─── Màu sắc theme ───────────────────────────────────────────────
+  // ─── Theme ────────────────────────────────────────────────────────────────
   static const _primary = Color(0xFF0A84FF);
   static const _bgPage = Color(0xFFF2F6FC);
   static const _bubbleUser = Color(0xFF0A84FF);
@@ -33,19 +39,21 @@ class _ChatbotPageState extends State<ChatbotPage>
   @override
   void initState() {
     super.initState();
-    _typingAnimController = AnimationController(
+    context.read<ChatbotCubit>().loadHistory();
+
+    _dotAnimController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
-    )..repeat(reverse: true);
+      duration: const Duration(milliseconds: 900),
+    )..repeat();
 
     _scrollController.addListener(() {
+      if (!_scrollController.hasClients) return;
       final atBottom =
           _scrollController.position.maxScrollExtent -
               _scrollController.offset <
-          120;
-      if (atBottom != !_showScrollFab) {
-        setState(() => _showScrollFab = !atBottom);
-      }
+          150;
+      if (!atBottom && !_showScrollFab) setState(() => _showScrollFab = true);
+      if (atBottom && _showScrollFab) setState(() => _showScrollFab = false);
     });
   }
 
@@ -53,29 +61,27 @@ class _ChatbotPageState extends State<ChatbotPage>
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
-    _typingAnimController.dispose();
+    _dotAnimController.dispose();
     super.dispose();
   }
 
-  void _scrollToBottom({bool animated = true}) {
+  void _scrollToBottom() {
     if (!_scrollController.hasClients) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) return;
-      if (animated) {
-        _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
-        );
-      } else {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-      }
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
     });
   }
 
   void _handleSend(ChatbotCubit cubit) {
     if (Supabase.instance.client.auth.currentSession == null) {
-      _showSnack('Vui lòng đăng nhập để tiếp tục.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vui lòng đăng nhập để tiếp tục.')),
+      );
       return;
     }
     final text = _controller.text.trim();
@@ -83,22 +89,14 @@ class _ChatbotPageState extends State<ChatbotPage>
     HapticFeedback.lightImpact();
     cubit.send(text);
     _controller.clear();
-  }
-
-  void _showSnack(String msg, {bool isError = false}) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: isError ? Colors.redAccent : null,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
-    );
+    setState(() {}); // refresh send button color
   }
 
   Future<void> _pickDateRange(ChatbotCubit cubit, ChatbotState state) async {
     if (state.botContext['hotel_id'] == null) {
-      _showSnack('Vui lòng chọn khách sạn trước.');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Vui lòng chọn khách sạn trước.')),
+      );
       return;
     }
     final picked = await showDateRangePicker(
@@ -106,9 +104,9 @@ class _ChatbotPageState extends State<ChatbotPage>
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
       builder:
-          (context, child) => Theme(
+          (ctx, child) => Theme(
             data: Theme.of(
-              context,
+              ctx,
             ).copyWith(colorScheme: const ColorScheme.light(primary: _primary)),
             child: child!,
           ),
@@ -116,7 +114,7 @@ class _ChatbotPageState extends State<ChatbotPage>
     if (picked != null) cubit.onDateRangeSelected(picked);
   }
 
-  Future<void> _showGuestPicker(ChatbotCubit cubit, int currentGuests) async {
+  Future<void> _showGuestPicker(ChatbotCubit cubit, int current) async {
     final result = await showModalBottomSheet<int>(
       context: context,
       backgroundColor: Colors.white,
@@ -124,16 +122,15 @@ class _ChatbotPageState extends State<ChatbotPage>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) {
-        int temp = currentGuests;
+        int temp = current;
         return StatefulBuilder(
-          builder: (context, setModalState) {
+          builder: (context, setModal) {
             return SafeArea(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+                padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Handle bar
                     Container(
                       width: 40,
                       height: 4,
@@ -148,17 +145,16 @@ class _ChatbotPageState extends State<ChatbotPage>
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.w700,
-                        color: _textBot,
                       ),
                     ),
                     const SizedBox(height: 24),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _CounterButton(
+                        _CounterBtn(
                           icon: Icons.remove,
                           enabled: temp > 1,
-                          onTap: () => setModalState(() => temp--),
+                          onTap: () => setModal(() => temp--),
                         ),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 32),
@@ -171,10 +167,10 @@ class _ChatbotPageState extends State<ChatbotPage>
                             ),
                           ),
                         ),
-                        _CounterButton(
+                        _CounterBtn(
                           icon: Icons.add,
                           enabled: temp < 20,
-                          onTap: () => setModalState(() => temp++),
+                          onTap: () => setModal(() => temp++),
                         ),
                       ],
                     ),
@@ -210,7 +206,7 @@ class _ChatbotPageState extends State<ChatbotPage>
     if (result != null) cubit.updateGuests(result);
   }
 
-  // ─── BUILD ────────────────────────────────────────────────────────
+  // ─── Build ────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final cubit = context.read<ChatbotCubit>();
@@ -230,14 +226,18 @@ class _ChatbotPageState extends State<ChatbotPage>
               )
               : null,
       body: BlocConsumer<ChatbotCubit, ChatbotState>(
-        listener: (context, state) => _scrollToBottom(),
-        builder: (context, state) {
+        listener: (ctx, state) {
+          // Cuộn xuống khi có tin nhắn mới hoặc đang stream
+          if (state.isSending || state.messages.isNotEmpty) _scrollToBottom();
+        },
+        builder: (ctx, state) {
           return Column(
             children: [
               _buildContextBar(state, cubit),
               if (state.botContext['hotel_id'] == null) _buildCityChips(cubit),
               Expanded(child: _buildMessageList(state, cubit)),
-              if (state.isSending) _buildTypingIndicator(),
+              // Typing dots chỉ hiện khi isSending nhưng chưa có streaming text
+              if (state.isSending && !state.isStreaming) _buildTypingDots(),
               _buildQuickReplies(state, cubit),
               _buildInputArea(state, cubit),
             ],
@@ -247,12 +247,12 @@ class _ChatbotPageState extends State<ChatbotPage>
     );
   }
 
+  // ─── AppBar ───────────────────────────────────────────────────────────────
   PreferredSizeWidget _buildAppBar(ChatbotCubit cubit) {
     return AppBar(
       backgroundColor: Colors.white,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
-      shadowColor: Colors.black12,
       titleSpacing: 0,
       title: Row(
         children: [
@@ -314,14 +314,12 @@ class _ChatbotPageState extends State<ChatbotPage>
     );
   }
 
-  /// Thanh hiển thị context hiện tại (khách sạn, ngày, khách)
+  // ─── Context bar ──────────────────────────────────────────────────────────
   Widget _buildContextBar(ChatbotState state, ChatbotCubit cubit) {
     final hasHotel = state.botContext['hotel_id'] != null;
     final hasDate = state.botContext['check_in'] != null;
-
-    if (!hasHotel && !hasDate && state.guests == 1) {
+    if (!hasHotel && !hasDate && state.guests == 1)
       return const SizedBox.shrink();
-    }
 
     return Container(
       color: Colors.white,
@@ -330,29 +328,31 @@ class _ChatbotPageState extends State<ChatbotPage>
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            if (hasHotel)
-              _ContextChip(
+            if (hasHotel) ...[
+              _CtxChip(
                 icon: Icons.hotel_outlined,
                 label: 'Đã chọn khách sạn',
                 color: Colors.green,
               ),
-            if (hasHotel) const SizedBox(width: 6),
-            if (hasDate)
-              _ContextChip(
+              const SizedBox(width: 6),
+            ],
+            if (hasDate) ...[
+              _CtxChip(
                 icon: Icons.date_range_outlined,
                 label:
                     '${state.botContext['check_in']} → ${state.botContext['check_out']}',
                 color: Colors.orange,
               ),
-            if (hasDate) const SizedBox(width: 6),
-            _ContextChip(
+              const SizedBox(width: 6),
+            ],
+            _CtxChip(
               icon: Icons.person_outline,
               label: '${state.guests} khách',
               color: _primary,
               onTap: () => _showGuestPicker(cubit, state.guests),
             ),
             const SizedBox(width: 6),
-            _ContextChip(
+            _CtxChip(
               icon: Icons.list_alt_outlined,
               label: 'Booking của tôi',
               color: Colors.purple,
@@ -364,6 +364,7 @@ class _ChatbotPageState extends State<ChatbotPage>
     );
   }
 
+  // ─── City chips ───────────────────────────────────────────────────────────
   Widget _buildCityChips(ChatbotCubit cubit) {
     final cities = ['Hà Nội', 'Đà Nẵng', 'TP.HCM', 'Hội An', 'Phú Quốc'];
     return Container(
@@ -376,41 +377,39 @@ class _ChatbotPageState extends State<ChatbotPage>
             padding: const EdgeInsets.only(bottom: 6),
             child: Text(
               'Tìm nhanh theo thành phố',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.grey.shade600,
-                fontWeight: FontWeight.w500,
-              ),
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
             ),
           ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children:
-                  cities.map((city) {
-                    return Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ActionChip(
-                        avatar: const Icon(
-                          Icons.location_on_outlined,
-                          size: 14,
-                          color: _chipText,
-                        ),
-                        label: Text(
-                          city,
-                          style: const TextStyle(
-                            color: _chipText,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
+                  cities
+                      .map(
+                        (city) => Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: ActionChip(
+                            avatar: const Icon(
+                              Icons.location_on_outlined,
+                              size: 14,
+                              color: _chipText,
+                            ),
+                            label: Text(
+                              city,
+                              style: const TextStyle(
+                                color: _chipText,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            backgroundColor: _chipBg,
+                            side: BorderSide.none,
+                            onPressed:
+                                () => cubit.send('tìm khách sạn ở $city'),
                           ),
                         ),
-                        backgroundColor: _chipBg,
-                        side: BorderSide.none,
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        onPressed: () => cubit.send('tìm khách sạn ở $city'),
-                      ),
-                    );
-                  }).toList(),
+                      )
+                      .toList(),
             ),
           ),
         ],
@@ -418,33 +417,42 @@ class _ChatbotPageState extends State<ChatbotPage>
     );
   }
 
+  // ─── Message list ─────────────────────────────────────────────────────────
   Widget _buildMessageList(ChatbotState state, ChatbotCubit cubit) {
-    if (state.messages.isEmpty) {
-      return _buildWelcomeScreen(cubit);
-    }
+    // Tổng số item = tin nhắn đã hoàn thành + 1 bubble streaming (nếu có)
+    final streamingActive = state.isStreaming;
+    final itemCount = state.messages.length + (streamingActive ? 1 : 0);
+
+    if (itemCount == 0) return _buildWelcome(cubit);
 
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-      itemCount: state.messages.length,
+      itemCount: itemCount,
       itemBuilder: (ctx, i) {
+        // Bubble streaming (luôn ở cuối)
+        if (streamingActive && i == state.messages.length) {
+          return _buildStreamingBubble(state.streamingText);
+        }
         final msg = state.messages[i];
         final showAvatar =
             msg.role == 'assistant' &&
             (i == 0 || state.messages[i - 1].role != 'assistant');
-        return _buildMessageBubble(
-          msg,
-          state,
-          cubit,
-          showBotAvatar: showAvatar,
-        );
+        return _buildBubble(msg, state, cubit, showAvatar: showAvatar);
       },
     );
   }
 
-  Widget _buildWelcomeScreen(ChatbotCubit cubit) {
+  // ─── Welcome screen ───────────────────────────────────────────────────────
+  Widget _buildWelcome(ChatbotCubit cubit) {
+    final suggestions = [
+      ('🏨', 'Tìm KS Đà Nẵng', 'tìm khách sạn ở Đà Nẵng'),
+      ('📋', 'Booking của tôi', 'list_bookings'),
+      ('🌟', 'KS 5 sao Hà Nội', 'tìm khách sạn ở Hà Nội'),
+      ('🏝️', 'KS Phú Quốc', 'tìm khách sạn ở Phú Quốc'),
+    ];
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -476,11 +484,7 @@ class _ChatbotPageState extends State<ChatbotPage>
             const SizedBox(height: 20),
             const Text(
               'Xin chào! 👋',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: _textBot,
-              ),
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
@@ -493,82 +497,76 @@ class _ChatbotPageState extends State<ChatbotPage>
               ),
             ),
             const SizedBox(height: 28),
-            _buildSuggestionsGrid(cubit),
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 2.8,
+              children:
+                  suggestions
+                      .map(
+                        (s) => InkWell(
+                          onTap: () => cubit.send(s.$3),
+                          borderRadius: BorderRadius.circular(14),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: Colors.grey.shade200),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.04),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                Text(
+                                  s.$1,
+                                  style: const TextStyle(fontSize: 18),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    s.$2,
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                      color: _textBot,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      )
+                      .toList(),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildSuggestionsGrid(ChatbotCubit cubit) {
-    final suggestions = [
-      ('🏨', 'Tìm khách sạn ở Đà Nẵng', 'tìm khách sạn ở Đà Nẵng'),
-      ('📋', 'Xem booking của tôi', 'list_bookings'),
-      ('🌟', 'Khách sạn 5 sao Hà Nội', 'tìm khách sạn ở Hà Nội'),
-      ('🏝️', 'Khách sạn Huế', 'tìm khách sạn ở Huế'),
-    ];
-
-    return GridView.count(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      crossAxisCount: 2,
-      crossAxisSpacing: 10,
-      mainAxisSpacing: 10,
-      childAspectRatio: 2.8,
-      children:
-          suggestions.map((s) {
-            return InkWell(
-              onTap: () => cubit.send(s.$3),
-              borderRadius: BorderRadius.circular(14),
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
-                ),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: Colors.grey.shade200),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.04),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    Text(s.$1, style: const TextStyle(fontSize: 18)),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        s.$2,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                          color: _textBot,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }).toList(),
-    );
-  }
-
-  Widget _buildMessageBubble(
+  // ─── Bubble hoàn chỉnh ────────────────────────────────────────────────────
+  Widget _buildBubble(
     ChatMessageEntity m,
     ChatbotState state,
     ChatbotCubit cubit, {
-    bool showBotAvatar = false,
+    bool showAvatar = false,
   }) {
     final isUser = m.role == 'user';
-
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(
@@ -576,12 +574,11 @@ class _ChatbotPageState extends State<ChatbotPage>
         mainAxisAlignment:
             isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
         children: [
-          // Bot avatar
           if (!isUser)
             Padding(
               padding: const EdgeInsets.only(right: 8, bottom: 2),
               child:
-                  showBotAvatar
+                  showAvatar
                       ? Container(
                         width: 30,
                         height: 30,
@@ -599,8 +596,6 @@ class _ChatbotPageState extends State<ChatbotPage>
                       )
                       : const SizedBox(width: 30),
             ),
-
-          // Bubble
           Flexible(
             child: Container(
               constraints: BoxConstraints(
@@ -636,14 +631,19 @@ class _ChatbotPageState extends State<ChatbotPage>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (m.content.isNotEmpty)
-                    Text(
-                      m.content,
-                      style: TextStyle(
-                        color: isUser ? _textUser : _textBot,
-                        fontSize: 15,
-                        height: 1.45,
-                      ),
-                    ),
+                    isUser
+                        // User: plain text
+                        ? Text(
+                          m.content,
+                          style: const TextStyle(
+                            color: _textUser,
+                            fontSize: 15,
+                            height: 1.45,
+                          ),
+                        )
+                        // Bot: Markdown rendering ✨
+                        : _BotMarkdown(text: m.content),
+
                   if (m.hotels != null && m.hotels!.isNotEmpty) ...[
                     const SizedBox(height: 10),
                     ...m.hotels!.map((h) => _buildHotelCard(h, cubit, state)),
@@ -658,14 +658,245 @@ class _ChatbotPageState extends State<ChatbotPage>
               ),
             ),
           ),
-
-          // User avatar placeholder (spacing)
-          if (isUser) const SizedBox(width: 0),
         ],
       ),
     );
   }
 
+  // ─── Streaming bubble (text đang đến dần) ────────────────────────────────
+  Widget _buildStreamingBubble(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // Avatar
+          Padding(
+            padding: const EdgeInsets.only(right: 8, bottom: 2),
+            child: Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFF0A84FF), Color(0xFF34AADC)],
+                ),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(
+                Icons.travel_explore,
+                color: Colors.white,
+                size: 16,
+              ),
+            ),
+          ),
+          Flexible(
+            child: Container(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78,
+              ),
+              margin: const EdgeInsets.only(top: 2, bottom: 2, right: 48),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: _bubbleBot,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(18),
+                  topRight: Radius.circular(18),
+                  bottomLeft: Radius.circular(4),
+                  bottomRight: Radius.circular(18),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.07),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _BotMarkdown(text: text),
+                  // Con trỏ nhấp nháy
+                  const SizedBox(height: 4),
+                  _BlinkingCursor(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─── Typing dots (trước khi có bất kỳ chunk nào) ─────────────────────────
+  Widget _buildTypingDots() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 50, bottom: 8, top: 4),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.06),
+                blurRadius: 6,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: AnimatedBuilder(
+            animation: _dotAnimController,
+            builder: (_, __) {
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: List.generate(3, (i) {
+                  final t = (_dotAnimController.value + i / 3) % 1.0;
+                  final scale =
+                      0.6 + 0.4 * (1 - (t - 0.5).abs() * 2).clamp(0.0, 1.0);
+                  return Transform.scale(
+                    scale: scale,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      margin: const EdgeInsets.symmetric(horizontal: 2),
+                      decoration: const BoxDecoration(
+                        color: _primary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  );
+                }),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Quick replies ────────────────────────────────────────────────────────
+  Widget _buildQuickReplies(ChatbotState state, ChatbotCubit cubit) {
+    final sugg = <String>[];
+    if (state.botContext['hotel_id'] != null &&
+        state.botContext['check_in'] == null)
+      sugg.add('📅 Chọn ngày');
+    if (state.botContext['hotel_id'] != null &&
+        state.botContext['check_in'] != null)
+      sugg.add('🛏 Xem phòng trống');
+    if (state.messages.any((m) => m.role == 'assistant'))
+      sugg.add('📋 Booking của tôi');
+    if (sugg.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      color: _bgPage,
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children:
+              sugg
+                  .map(
+                    (s) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ActionChip(
+                        label: Text(
+                          s,
+                          style: const TextStyle(
+                            color: _chipText,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        backgroundColor: _chipBg,
+                        side: BorderSide.none,
+                        onPressed: () {
+                          if (s.contains('Chọn ngày'))
+                            _pickDateRange(cubit, state);
+                          else if (s.contains('Xem phòng'))
+                            cubit.send('còn phòng không');
+                          else
+                            cubit.send('list_bookings');
+                        },
+                      ),
+                    ),
+                  )
+                  .toList(),
+        ),
+      ),
+    );
+  }
+
+  // ─── Input area ───────────────────────────────────────────────────────────
+  Widget _buildInputArea(ChatbotState state, ChatbotCubit cubit) {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _bgPage,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: Colors.grey.shade300),
+                ),
+                child: TextField(
+                  controller: _controller,
+                  onSubmitted: (_) => _handleSend(cubit),
+                  maxLines: 4,
+                  minLines: 1,
+                  textInputAction: TextInputAction.send,
+                  onChanged: (_) => setState(() {}),
+                  style: const TextStyle(fontSize: 15, color: _textBot),
+                  decoration: const InputDecoration(
+                    hintText: 'Nhập tin nhắn...',
+                    hintStyle: TextStyle(color: Colors.grey),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: state.isSending ? null : () => _handleSend(cubit),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color:
+                      (_controller.text.trim().isNotEmpty && !state.isSending)
+                          ? _primary
+                          : Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(22),
+                ),
+                child: Icon(
+                  Icons.send_rounded,
+                  color:
+                      (_controller.text.trim().isNotEmpty && !state.isSending)
+                          ? Colors.white
+                          : Colors.grey.shade500,
+                  size: 20,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ─── Hotel card ───────────────────────────────────────────────────────────
   Widget _buildHotelCard(dynamic h, ChatbotCubit cubit, ChatbotState state) {
     final stars = (h['star_rating'] as num?)?.toInt() ?? 0;
     return Card(
@@ -675,11 +906,9 @@ class _ChatbotPageState extends State<ChatbotPage>
         borderRadius: BorderRadius.circular(14),
         side: BorderSide(color: Colors.grey.shade200),
       ),
-      color: Colors.white,
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: () {
-          HapticFeedback.selectionClick();
           cubit.updateBotContext({'hotel_id': h['id']});
           _pickDateRange(cubit, state);
         },
@@ -687,7 +916,6 @@ class _ChatbotPageState extends State<ChatbotPage>
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              // Thumbnail placeholder
               Container(
                 width: 48,
                 height: 48,
@@ -707,7 +935,6 @@ class _ChatbotPageState extends State<ChatbotPage>
                       style: const TextStyle(
                         fontWeight: FontWeight.w700,
                         fontSize: 14,
-                        color: _textBot,
                       ),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
@@ -729,7 +956,7 @@ class _ChatbotPageState extends State<ChatbotPage>
                           ),
                         ),
                         if (stars > 0) ...[
-                          const SizedBox(width: 8),
+                          const SizedBox(width: 6),
                           Row(
                             children: List.generate(
                               stars.clamp(0, 5),
@@ -754,6 +981,7 @@ class _ChatbotPageState extends State<ChatbotPage>
     );
   }
 
+  // ─── Room card ────────────────────────────────────────────────────────────
   Widget _buildRoomCard(dynamic r, ChatbotState state, ChatbotCubit cubit) {
     return Card(
       margin: const EdgeInsets.only(top: 8),
@@ -762,7 +990,6 @@ class _ChatbotPageState extends State<ChatbotPage>
         borderRadius: BorderRadius.circular(14),
         side: BorderSide(color: Colors.grey.shade200),
       ),
-      color: Colors.white,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Row(
@@ -776,7 +1003,6 @@ class _ChatbotPageState extends State<ChatbotPage>
                     style: const TextStyle(
                       fontWeight: FontWeight.w700,
                       fontSize: 14,
-                      color: _textBot,
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -821,191 +1047,126 @@ class _ChatbotPageState extends State<ChatbotPage>
       ),
     );
   }
+}
 
-  Widget _buildTypingIndicator() {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.only(left: 50, bottom: 8, top: 4),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.06),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: List.generate(3, (i) {
-              return AnimatedBuilder(
-                animation: _typingAnimController,
-                builder: (_, __) {
-                  final t = (_typingAnimController.value + i * 0.3) % 1.0;
-                  final scale =
-                      0.6 + 0.4 * (1 - (t - 0.5).abs() * 2).clamp(0, 1);
-                  return Transform.scale(
-                    scale: scale,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                      decoration: const BoxDecoration(
-                        color: _primary,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  );
-                },
-              );
-            }),
+// ─── _BotMarkdown: render Markdown trong bubble bot ───────────────────────────
+class _BotMarkdown extends StatelessWidget {
+  final String text;
+  const _BotMarkdown({required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    return MarkdownBody(
+      data: text,
+      selectable: true,
+      styleSheet: MarkdownStyleSheet(
+        p: const TextStyle(
+          color: Color(0xFF1C1C1E),
+          fontSize: 15,
+          height: 1.45,
+        ),
+        strong: const TextStyle(
+          color: Color(0xFF1C1C1E),
+          fontWeight: FontWeight.w700,
+          fontSize: 15,
+        ),
+        em: const TextStyle(
+          color: Color(0xFF1C1C1E),
+          fontStyle: FontStyle.italic,
+          fontSize: 15,
+        ),
+        code: TextStyle(
+          backgroundColor: Colors.grey.shade100,
+          color: const Color(0xFF0A84FF),
+          fontFamily: 'monospace',
+          fontSize: 13,
+        ),
+        codeblockDecoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        listBullet: const TextStyle(color: Color(0xFF1C1C1E), fontSize: 15),
+        blockquoteDecoration: BoxDecoration(
+          color: Colors.blue.shade50,
+          borderRadius: BorderRadius.circular(4),
+          border: Border(
+            left: BorderSide(color: Colors.blue.shade200, width: 3),
           ),
         ),
+        h1: const TextStyle(
+          color: Color(0xFF1C1C1E),
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+        h2: const TextStyle(
+          color: Color(0xFF1C1C1E),
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+        ),
+        h3: const TextStyle(
+          color: Color(0xFF1C1C1E),
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+        ),
+        horizontalRuleDecoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
+        ),
       ),
+      onTapLink: (text, href, title) {
+        // Handle link tap nếu cần
+      },
     );
   }
+}
 
-  /// Quick reply buttons xuất hiện tùy context
-  Widget _buildQuickReplies(ChatbotState state, ChatbotCubit cubit) {
-    final suggestions = <String>[];
+// ─── _BlinkingCursor ──────────────────────────────────────────────────────────
+class _BlinkingCursor extends StatefulWidget {
+  @override
+  State<_BlinkingCursor> createState() => _BlinkingCursorState();
+}
 
-    if (state.botContext['hotel_id'] != null &&
-        state.botContext['check_in'] == null) {
-      suggestions.add('📅 Chọn ngày');
-    }
-    if (state.botContext['hotel_id'] != null &&
-        state.botContext['check_in'] != null) {
-      suggestions.add('🛏 Xem phòng trống');
-    }
-    if (state.messages.any((m) => m.role == 'assistant')) {
-      suggestions.add('📋 Booking của tôi');
-    }
+class _BlinkingCursorState extends State<_BlinkingCursor>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
 
-    if (suggestions.isEmpty) return const SizedBox.shrink();
-
-    return Container(
-      color: _bgPage,
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children:
-              suggestions.map((s) {
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ActionChip(
-                    label: Text(
-                      s,
-                      style: const TextStyle(
-                        color: _chipText,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    backgroundColor: _chipBg,
-                    side: BorderSide.none,
-                    onPressed: () {
-                      if (s.contains('Chọn ngày')) {
-                        _pickDateRange(cubit, state);
-                      } else if (s.contains('Xem phòng')) {
-                        cubit.send('còn phòng không');
-                      } else if (s.contains('Booking')) {
-                        cubit.send('list_bookings');
-                      }
-                    },
-                  ),
-                );
-              }).toList(),
-        ),
-      ),
-    );
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 500),
+    )..repeat(reverse: true);
   }
 
-  Widget _buildInputArea(ChatbotState state, ChatbotCubit cubit) {
-    return Container(
-      color: Colors.white,
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      child: SafeArea(
-        top: false,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  color: _bgPage,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: Colors.grey.shade300),
-                ),
-                child: TextField(
-                  controller: _controller,
-                  onSubmitted: (_) => _handleSend(cubit),
-                  maxLines: 4,
-                  minLines: 1,
-                  textInputAction: TextInputAction.send,
-                  style: const TextStyle(fontSize: 15, color: _textBot),
-                  decoration: const InputDecoration(
-                    hintText: 'Nhập tin nhắn...',
-                    hintStyle: TextStyle(color: Colors.grey),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
-                    ),
-                  ),
-                ),
-              ),
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder:
+          (_, __) => Opacity(
+            opacity: _ctrl.value,
+            child: Container(
+              width: 2,
+              height: 16,
+              color: const Color(0xFF0A84FF),
             ),
-            const SizedBox(width: 8),
-            AnimatedBuilder(
-              animation: _controller,
-              builder: (_, __) {
-                final hasText = _controller.text.trim().isNotEmpty;
-                return GestureDetector(
-                  onTap: state.isSending ? null : () => _handleSend(cubit),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color:
-                          hasText && !state.isSending
-                              ? _primary
-                              : Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(22),
-                    ),
-                    child: Icon(
-                      Icons.send_rounded,
-                      color:
-                          hasText && !state.isSending
-                              ? Colors.white
-                              : Colors.grey.shade500,
-                      size: 20,
-                    ),
-                  ),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
+          ),
     );
   }
 }
 
 // ─── Helper Widgets ───────────────────────────────────────────────────────────
-
-class _CounterButton extends StatelessWidget {
+class _CounterBtn extends StatelessWidget {
   final IconData icon;
   final bool enabled;
   final VoidCallback onTap;
-
-  const _CounterButton({
+  const _CounterBtn({
     required this.icon,
     required this.enabled,
     required this.onTap,
@@ -1032,13 +1193,12 @@ class _CounterButton extends StatelessWidget {
   }
 }
 
-class _ContextChip extends StatelessWidget {
+class _CtxChip extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
   final VoidCallback? onTap;
-
-  const _ContextChip({
+  const _CtxChip({
     required this.icon,
     required this.label,
     required this.color,
