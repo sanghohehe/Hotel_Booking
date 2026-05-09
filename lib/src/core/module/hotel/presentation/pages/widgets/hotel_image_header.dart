@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 
 class HotelImageHeader extends StatefulWidget {
@@ -47,11 +48,39 @@ class _HotelImageHeaderState extends State<HotelImageHeader> {
       children: [
         // 1. PageView
         PageView.builder(
-          controller: _controller, // Gán controller vào đây
+          controller: _controller,
           itemCount: displayList.length,
           onPageChanged: (index) => setState(() => _currentIndex = index),
           itemBuilder: (context, index) {
-            return Image.network(displayList[index], fit: BoxFit.cover);
+            return CachedNetworkImage(
+              imageUrl: displayList[index],
+              fit: BoxFit.cover,
+              // Hiệu ứng mờ dần khi ảnh tải xong (mặc định là 1s, có thể chỉnh ngắn lại)
+              fadeInDuration: const Duration(milliseconds: 500),
+              // Widget hiển thị khi đang tải (nên dùng Center để căn giữa PageView)
+              placeholder:
+                  (context, url) => Container(
+                    color: Colors.grey[200],
+                    child: const Center(child: CircularProgressIndicator()),
+                  ),
+              // Widget hiển thị khi ảnh lỗi
+              errorWidget:
+                  (context, url, error) => Container(
+                    color: Colors.grey[200],
+                    child: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.error_outline, color: Colors.red, size: 40),
+                        SizedBox(height: 8),
+                        Text(
+                          "Không thể tải ảnh",
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      ],
+                    ),
+                  ),
+            );
           },
         ),
 

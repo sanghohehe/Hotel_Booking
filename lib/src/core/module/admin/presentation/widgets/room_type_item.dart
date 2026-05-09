@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../../hotel/data/models/hotel_model.dart';
 
@@ -27,9 +28,28 @@ class RoomTypeItem extends StatelessWidget {
             width: 70,
             height: 70,
             color: Colors.grey[200],
+            // Bọc thêm ClipRRect nếu bạn muốn bo góc cho ảnh khớp với Container
             child:
                 (room.imageUrl != null && room.imageUrl!.isNotEmpty)
-                    ? Image.network(room.imageUrl!.first, fit: BoxFit.cover)
+                    ? CachedNetworkImage(
+                      imageUrl: room.imageUrl!.first,
+                      fit: BoxFit.cover,
+                      // Hiển thị loading nhẹ trong ô vuông 70x70
+                      placeholder:
+                          (context, url) => const Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                      // Hiển thị icon giường mặc định nếu lỗi load ảnh
+                      errorWidget:
+                          (context, url, error) => const Icon(
+                            Icons.king_bed,
+                            color: Color(0xFF0D47A1),
+                          ),
+                    )
                     : const Icon(Icons.king_bed, color: Color(0xFF0D47A1)),
           ),
         ),
@@ -75,8 +95,7 @@ class RoomTypeItem extends StatelessWidget {
           ],
         ),
         trailing: Row(
-          mainAxisSize:
-              MainAxisSize.min, 
+          mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
               icon: const Icon(
@@ -85,8 +104,7 @@ class RoomTypeItem extends StatelessWidget {
                 color: Colors.blueGrey,
               ),
               onPressed: onEdit,
-              constraints:
-                  const BoxConstraints(), 
+              constraints: const BoxConstraints(),
               padding: const EdgeInsets.all(8),
             ),
             IconButton(
@@ -95,7 +113,7 @@ class RoomTypeItem extends StatelessWidget {
                 size: 20,
                 color: Colors.redAccent,
               ),
-              onPressed: onDelete, 
+              onPressed: onDelete,
               constraints: const BoxConstraints(),
               padding: const EdgeInsets.all(8),
             ),

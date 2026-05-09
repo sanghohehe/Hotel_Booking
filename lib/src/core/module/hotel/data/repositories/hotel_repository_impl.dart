@@ -1,11 +1,11 @@
 import 'package:booking_app/src/core/module/hotel/data/hotel_api.dart';
 import 'package:booking_app/src/core/module/hotel/data/models/hotel_model.dart';
 import 'package:booking_app/src/core/module/hotel/domain/entities/hotel_entity.dart';
+import 'package:diacritic/diacritic.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-// Import tất cả các Interface cần thiết
 import 'package:booking_app/src/core/module/hotel/domain/repositories/hotel_repository.dart';
 import 'package:booking_app/src/core/module/hotel/domain/repositories/hotel_detail_repository.dart';
 import 'package:booking_app/src/core/module/admin/domain/repositories/i_hotel_repository.dart';
@@ -15,10 +15,20 @@ import '../../../reviews/data/review_api.dart';
 import '../../../bookings/data/booking_api.dart';
 import '../../../reviews/data/models/review_model.dart';
 
+// ================= CLEAN HELPERS =================
+class _ImageCleaner {
+  static String clean(String url) {
+    return url.trim().replaceAll('\n', '').replaceAll(' ', '');
+  }
+
+  static List<String> cleanList(List<String>? list) {
+    if (list == null) return [];
+    return list.map(clean).where((e) => e.isNotEmpty).toList();
+  }
+}
+
 class HotelRepositoryImpl
     implements HotelRepository, HotelDetailRepository, IHotelRepository {
-  // Đảm bảo implements cả 3 Interface
-
   final HotelApi _api;
   final _supabase = Supabase.instance.client;
 
@@ -28,20 +38,48 @@ class HotelRepositoryImpl
 
   HotelRepositoryImpl(this._api);
 
-  // --- PHẦN DÀNH CHO USER (HIỂN THỊ) ---
+  // ================= USER =================
 
   @override
-  Future<List<HotelEntity>> getHotels({double? minRating, String? city,String? keyword,}) async {
-    final models = await _api.getHotels(minRating: minRating, keyword: keyword);
-    return models.map((m) => m.toEntity()).toList();
+  Future<List<HotelEntity>> getHotels({
+    double? minRating,
+    String? city,
+    String? keyword,
+    int page = 1,
+    int limit = 10,
+  }) async {
+    final isSearching = keyword != null && keyword.trim().isNotEmpty;
+
+    final models = await _api.getHotels(
+      minRating: minRating,
+      city: city,
+      keyword: null,
+      page: isSearching ? 1 : page,
+      limit: isSearching ? 200 : limit,
+    );
+
+    if (!isSearching) {
+      return models.map((m) => m.toEntity()).toList();
+    }
+
+    final keywordNormalized = removeDiacritics(keyword!).toLowerCase().trim();
+
+    return models
+        .where((hotel) {
+          final name = removeDiacritics(hotel.name).toLowerCase();
+          final cityName = removeDiacritics(hotel.city).toLowerCase();
+
+          return name.contains(keywordNormalized) ||
+              cityName.contains(keywordNormalized);
+        })
+        .map((m) => m.toEntity())
+        .toList();
   }
 
   @override
   Future<HotelEntity> getHotelDetail(String id) async {
-    // 1. Lấy dữ liệu model từ API
     final model = await _api.getHotelDetail(id);
 
-    // 2. Trả về Entity (Sử dụng hàm toEntity đã có sẵn logic hoặc map thủ công để an toàn)
     return HotelEntity(
       id: model.id,
       name: model.name,
@@ -49,9 +87,9 @@ class HotelRepositoryImpl
       city: model.city,
       starRating: model.starRating,
       description: model.description,
-      thumbnailUrl: model.thumbnailUrl, // Ảnh đại diện đầu tiên
-      images: model.images, // Danh sách ảnh Banner khách sạn
-      roomTypes: model.roomTypes, // Giữ nguyên List<RoomTypeModel>
+      thumbnailUrl: model.thumbnailUrl,
+      images: model.images,
+      roomTypes: model.roomTypes,
     );
   }
 
@@ -60,7 +98,7 @@ class HotelRepositoryImpl
     return await _reviewApi.getReviewsForHotel(hotelId);
   }
 
-  // --- PHẦN DÀNH CHO ADMIN (QUẢN LÝ) ---
+  // ================= ADMIN =================
 
   @override
   Future<List<RoomTypeModel>> getRoomTypes(String hotelId) =>
@@ -68,6 +106,8 @@ class HotelRepositoryImpl
 
   @override
   Future<void> deleteRoomType(String roomId) => _api.deleteRoomType(roomId);
+
+  // ================= SAVE HOTEL =================
 
   @override
   Future<List<String>> saveHotel({
@@ -78,36 +118,33 @@ class HotelRepositoryImpl
     String? description,
     required double starRating,
     required List<XFile> multipleImages,
-    required List<String> existingImages, 
+    required List<String> existingImages,
   }) async {
-    // 1. Lấy danh sách ảnh hiện tại đang hiển thị trên UI làm gốc
-    // Thay vì lấy từ existingHotel.images, ta dùng existingImages truyền từ Cubit xuống
-    List<String> finalImageUrls = List<String>.from(existingImages);
+    List<String> finalImageUrls = _ImageCleaner.cleanList(existingImages);
 
-    // 2. Upload các ảnh mới chọn (nếu có)
     for (var file in multipleImages) {
       try {
         final bytes = await file.readAsBytes();
-        // Tạo tên file duy nhất để tránh trùng lặp
         final fileName = 'hotel_${DateTime.now().microsecondsSinceEpoch}.jpg';
 
         await _supabase.storage
             .from('hotel-images')
             .uploadBinary(fileName, bytes);
 
-        final url = _supabase.storage
+        final rawUrl = _supabase.storage
             .from('hotel-images')
             .getPublicUrl(fileName);
 
-        // Thêm URL mới vào danh sách tổng
-        finalImageUrls.add(url);
+        final cleanUrl = _ImageCleaner.clean(rawUrl);
+
+        finalImageUrls.add(cleanUrl);
       } catch (e) {
-        debugPrint('Lỗi upload ảnh: $e');
-        // Tùy chọn: có thể quăng lỗi hoặc bỏ qua ảnh lỗi
+        debugPrint('Upload error: $e');
       }
     }
 
-    // 3. Cập nhật Database với danh sách ảnh ĐÃ GỘP (finalImageUrls)
+    finalImageUrls = _ImageCleaner.cleanList(finalImageUrls);
+
     if (existingHotel == null) {
       await _api.createHotel(
         name: name,
@@ -129,9 +166,10 @@ class HotelRepositoryImpl
       );
     }
 
-    // 4. Trả về danh sách cuối cùng để Cubit cập nhật lại state.existingImages
     return finalImageUrls;
   }
+
+  // ================= SAVE ROOM =================
 
   @override
   Future<void> saveRoomType({
@@ -139,23 +177,38 @@ class HotelRepositoryImpl
     required RoomTypeModel room,
     required List<XFile> newImages,
   }) async {
-    List<String> imageUrls = List<String>.from(room.imageUrl);
+    List<String> imageUrls = _ImageCleaner.cleanList(room.imageUrl);
 
     for (var image in newImages) {
       final bytes = await image.readAsBytes();
       final fileName = 'room_${DateTime.now().microsecondsSinceEpoch}.jpg';
+
       await _supabase.storage
           .from('hotel-images')
           .uploadBinary(fileName, bytes);
-      imageUrls.add(
-        _supabase.storage.from('hotel-images').getPublicUrl(fileName),
-      );
+
+      final rawUrl = _supabase.storage
+          .from('hotel-images')
+          .getPublicUrl(fileName);
+
+      imageUrls.add(_ImageCleaner.clean(rawUrl));
     }
 
-    // Logic gọi API lưu RoomType tùy theo HotelApi của bạn
+    imageUrls = _ImageCleaner.cleanList(imageUrls);
+
+    await _api.updateRoomType(
+      id: room.id,
+      name: room.name,
+      pricePerNight: room.pricePerNight,
+      capacity: room.capacity,
+      bedType: room.bedType,
+      description: room.description,
+      imageUrl: imageUrls,
+      amenities: room.amenities,
+    );
   }
 
-  // --- PHẦN TƯƠNG TÁC (FAVORITE, REVIEW) ---
+  // ================= FAVORITE =================
 
   @override
   Future<bool> isFavorite(String hotelId) => _favoriteApi.isFavorite(hotelId);
@@ -166,6 +219,8 @@ class HotelRepositoryImpl
         ? await _favoriteApi.addFavorite(hotelId)
         : await _favoriteApi.removeFavorite(hotelId);
   }
+
+  // ================= REVIEW CHECK =================
 
   @override
   Future<bool> checkCanReview(String hotelId) =>

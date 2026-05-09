@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import 'package:booking_app/src/core/module/hotel/data/models/hotel_model.dart';
+import 'package:booking_app/src/core/module/hotel/data/recently_viewed_service.dart';
 import 'package:booking_app/src/core/module/hotel/domain/entities/hotel_entity.dart';
-import 'package:booking_app/src/core/module/hotel/presentation/cubit/HotelState.dart';
+import 'package:booking_app/src/core/module/hotel/presentation/cubit/hotelState.dart';
 import 'package:booking_app/src/core/module/hotel/presentation/cubit/hotel_cubit.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../data/city_api.dart';
@@ -28,19 +31,29 @@ class _HotelListPageState extends State<HotelListPage> {
   Timer? _debounce;
 
   bool _loadingCities = false;
+  final ScrollController _scrollController = ScrollController();
   List<CityModel> _cities = [];
+  List<HotelEntity> _recentlyViewed = [];
 
   @override
   void initState() {
     super.initState();
     _loadCities();
+    _loadRecentlyViewed();
     context.read<HotelCubit>().fetchHotels();
   }
 
   @override
   void dispose() {
     _debounce?.cancel();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadRecentlyViewed() async {
+    final hotels = await RecentlyViewedService.getHotels();
+    debugPrint('Recently viewed count: ${hotels.length}');
+    if (mounted) setState(() => _recentlyViewed = hotels);
   }
 
   Future<void> _loadCities() async {
@@ -61,14 +74,13 @@ class _HotelListPageState extends State<HotelListPage> {
       minRating: _selectedMinRating,
       city: _selectedCity,
       keyword: _searchKeyword,
+      page: 1,
     );
   }
 
   void _onSearchChanged(String value) {
-    _searchKeyword = value;
-
+    _searchKeyword = value.isEmpty ? null : value;
     if (_debounce?.isActive ?? false) _debounce!.cancel();
-
     _debounce = Timer(const Duration(milliseconds: 400), () {
       _reload();
     });
@@ -78,16 +90,6 @@ class _HotelListPageState extends State<HotelListPage> {
     _searchKeyword = null;
     _reload();
     setState(() {});
-  }
-
-  Widget _buildAmenity(IconData icon, String text) {
-    return Row(
-      children: [
-        Icon(icon, size: 16, color: Colors.teal),
-        const SizedBox(width: 4),
-        Text(text, style: const TextStyle(fontSize: 12, color: Colors.teal)),
-      ],
-    );
   }
 
   void _openCityFilter() {
@@ -109,10 +111,31 @@ class _HotelListPageState extends State<HotelListPage> {
                   ),
                 ),
               ),
+
+              // Option clear filter
+              ListTile(
+                title: const Text(
+                  'All Cities',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                leading: const Icon(Icons.public, color: Colors.teal),
+                selected: _selectedCity == null,
+                selectedTileColor: Colors.teal.withOpacity(0.1),
+                onTap: () {
+                  setState(() => _selectedCity = null);
+                  _reload();
+                  Navigator.pop(context);
+                },
+              ),
+
+              const Divider(),
+
               ..._cities.map(
                 (city) => ListTile(
                   title: Text(city.name),
                   leading: const Icon(Icons.location_city),
+                  selected: _selectedCity == city.name,
+                  selectedTileColor: Colors.teal.withOpacity(0.1),
                   onTap: () {
                     setState(() => _selectedCity = city.name);
                     _reload();
@@ -125,6 +148,21 @@ class _HotelListPageState extends State<HotelListPage> {
     );
   }
 
+  String _getMinPrice(HotelEntity hotel) {
+    if (hotel.roomTypes.isEmpty) return 'N/A';
+
+    final prices =
+        hotel.roomTypes
+            .whereType<RoomTypeModel>()
+            .map((r) => r.pricePerNight)
+            .toList();
+
+    if (prices.isEmpty) return 'N/A';
+
+    final minPrice = prices.reduce((a, b) => a < b ? a : b);
+    return 'From \$${minPrice.toStringAsFixed(0)}/night';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -133,8 +171,9 @@ class _HotelListPageState extends State<HotelListPage> {
     return Scaffold(
       backgroundColor: Colors.grey[50],
       body: CustomScrollView(
+        controller: _scrollController,
         slivers: [
-          // APP BAR (GIỮ NGUYÊN)
+          // APP BAR
           SliverAppBar(
             expandedHeight: 120.0,
             floating: true,
@@ -157,14 +196,13 @@ class _HotelListPageState extends State<HotelListPage> {
             ),
           ),
 
-          // 🔥 FILTER (CHỈ GỘP SEARCH + CITY)
+          // FILTER
           SliverToBoxAdapter(
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ✅ GỘP 2 Ô TẠI ĐÂY
                   GestureDetector(
                     onTap: _openCityFilter,
                     child: Container(
@@ -181,7 +219,6 @@ class _HotelListPageState extends State<HotelListPage> {
                         children: [
                           Icon(Icons.search, color: primaryColor),
                           const SizedBox(width: 12),
-
                           Expanded(
                             child: TextField(
                               onChanged: _onSearchChanged,
@@ -194,7 +231,6 @@ class _HotelListPageState extends State<HotelListPage> {
                               ),
                             ),
                           ),
-
                           if (_searchKeyword != null &&
                               _searchKeyword!.isNotEmpty)
                             GestureDetector(
@@ -206,9 +242,30 @@ class _HotelListPageState extends State<HotelListPage> {
                     ),
                   ),
 
+                  // Chip hiển thị thành phố đang filter
+                  if (_selectedCity != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Wrap(
+                        children: [
+                          Chip(
+                            avatar: const Icon(Icons.location_city, size: 16),
+                            label: Text(_selectedCity!),
+                            deleteIcon: const Icon(Icons.close, size: 16),
+                            onDeleted: () {
+                              setState(() => _selectedCity = null);
+                              _reload();
+                            },
+                            backgroundColor: Colors.teal.withOpacity(0.1),
+                            side: const BorderSide(color: Colors.teal),
+                          ),
+                        ],
+                      ),
+                    ),
+
                   const SizedBox(height: 16),
 
-                  // ⭐ RATING FILTER (GIỮ NGUYÊN)
+                  // Rating filter chips
                   SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
                     child: Row(
@@ -230,27 +287,6 @@ class _HotelListPageState extends State<HotelListPage> {
                                   );
                                   _reload();
                                 },
-                                selectedColor: primaryColor.withOpacity(0.1),
-                                labelStyle: TextStyle(
-                                  color:
-                                      isSelected
-                                          ? primaryColor
-                                          : Colors.grey[700],
-                                  fontWeight:
-                                      isSelected
-                                          ? FontWeight.bold
-                                          : FontWeight.normal,
-                                ),
-                                backgroundColor: Colors.white,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(20),
-                                  side: BorderSide(
-                                    color:
-                                        isSelected
-                                            ? primaryColor
-                                            : Colors.grey[300]!,
-                                  ),
-                                ),
                               ),
                             );
                           }).toList(),
@@ -261,7 +297,157 @@ class _HotelListPageState extends State<HotelListPage> {
             ),
           ),
 
-          // LIST (GIỮ NGUYÊN 100%)
+          if (_recentlyViewed.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          '🕐 Recently Viewed',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () async {
+                            await RecentlyViewedService.clear();
+                            setState(() => _recentlyViewed = []);
+                          },
+                          child: Text(
+                            'Clear',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(
+                    height: 170, // Tăng nhẹ chiều cao để ảnh hiển thị đẹp hơn
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: _recentlyViewed.length,
+                      itemBuilder: (_, index) {
+                        final hotel = _recentlyViewed[index];
+                        return GestureDetector(
+                          onTap: () async {
+                            await Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => HotelDetailPage(hotel: hotel),
+                              ),
+                            );
+                            _loadRecentlyViewed(); // ✅ reload sau khi back
+                          },
+                          child: SizedBox(
+                            width:
+                                130, // Thu gọn bề ngang thẻ để trông thanh thoát hơn
+                            child: Container(
+                              margin: const EdgeInsets.only(right: 12),
+                              child: Stack(
+                                children: [
+                                  // 1. Hình ảnh bo tròn
+                                  // THAY THẾ PHẦN NÀY
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: CachedNetworkImage(
+                                      imageUrl: hotel.thumbnailUrl ?? '',
+                                      height: 170,
+                                      width: 130,
+                                      fit: BoxFit.cover,
+                                      placeholder:
+                                          (context, url) => const Center(
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                            ),
+                                          ),
+                                      errorWidget:
+                                          (context, url, error) => Container(
+                                            height: 170,
+                                            width: 130,
+                                            color: Colors.grey[200],
+                                            child: const Icon(
+                                              Icons.hotel,
+                                              size: 40,
+                                              color: Colors.grey,
+                                            ),
+                                          ),
+                                    ),
+                                  ),
+
+                                  // 2. Lớp Gradient tối làm nền cho chữ
+                                  Positioned.fill(
+                                    child: DecoratedBox(
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(12),
+                                        gradient: const LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Colors.transparent,
+                                            Colors.black54,
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+
+                                  // 3. Nội dung chữ
+                                  Positioned(
+                                    bottom: 12,
+                                    left: 10,
+                                    right: 10,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          hotel.name,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          hotel.city,
+                                          style: const TextStyle(
+                                            color: Colors.white70,
+                                            fontSize: 10,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+              ),
+            ),
+
+          // HOTEL GRID + PAGINATION
           BlocBuilder<HotelCubit, HotelState>(
             builder: (context, state) {
               if (state is HotelLoading) {
@@ -276,7 +462,7 @@ class _HotelListPageState extends State<HotelListPage> {
                 );
               }
 
-              if (state is HotelLoaded) {
+              if (state is HotelLoadedWithPagination) {
                 final hotels = state.hotels;
 
                 if (hotels.isEmpty) {
@@ -285,14 +471,70 @@ class _HotelListPageState extends State<HotelListPage> {
                   );
                 }
 
-                return SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  sliver: SliverList(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) =>
-                          _buildHotelCard(hotels[index], primaryColor),
-                      childCount: hotels.length,
-                    ),
+                return SliverToBoxAdapter(
+                  child: Column(
+                    children: [
+                      // Grid 2 cột
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: 2,
+                              crossAxisSpacing: 12,
+                              mainAxisSpacing: 12,
+                              childAspectRatio: 0.65,
+                            ),
+                        itemCount: hotels.length,
+                        itemBuilder:
+                            (_, index) =>
+                                _buildHotelCard(hotels[index], primaryColor),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Pagination
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(state.totalPages, (index) {
+                          final page = index + 1;
+                          final isSelected = page == state.currentPage;
+
+                          return GestureDetector(
+                            onTap: () {
+                              context.read<HotelCubit>().fetchHotels(
+                                page: page,
+                                minRating: _selectedMinRating,
+                                city: _selectedCity,
+                                keyword: _searchKeyword,
+                              );
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(horizontal: 4),
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color:
+                                    isSelected
+                                        ? primaryColor
+                                        : Colors.grey[200],
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '$page',
+                                style: TextStyle(
+                                  color:
+                                      isSelected ? Colors.white : Colors.black,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          );
+                        }),
+                      ),
+
+                      const SizedBox(height: 20),
+                    ],
                   ),
                 );
               }
@@ -305,68 +547,84 @@ class _HotelListPageState extends State<HotelListPage> {
     );
   }
 
-  // 🔥 GIỮ NGUYÊN UI HOTEL 100%
   Widget _buildHotelCard(HotelEntity hotel, Color primaryColor) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 20),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
-            blurRadius: 15,
-            offset: const Offset(0, 5),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
       child: InkWell(
-        onTap:
-            () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => HotelDetailPage(hotel: hotel)),
-            ),
-        borderRadius: BorderRadius.circular(20),
+        onTap: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => HotelDetailPage(hotel: hotel)),
+          );
+          _loadRecentlyViewed(); // ✅ reload sau khi back từ detail
+        },
+
+        borderRadius: BorderRadius.circular(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Thumbnail
             Stack(
               children: [
+                // THAY THẾ PHẦN NÀY
+                // THAY THẾ PHẦN NÀY
                 ClipRRect(
                   borderRadius: const BorderRadius.vertical(
-                    top: Radius.circular(20),
+                    top: Radius.circular(16),
                   ),
-                  child: Image.network(
-                    hotel.thumbnailUrl ?? '',
-                    height: 180,
+                  child: CachedNetworkImage(
+                    imageUrl: hotel.thumbnailUrl ?? '',
+                    height: 150,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    errorBuilder:
-                        (_, __, ___) => Container(
+                    placeholder:
+                        (context, url) => const Center(
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                    errorWidget:
+                        (context, url, error) => Container(
                           color: Colors.grey[200],
-                          height: 180,
-                          child: const Icon(Icons.hotel),
+                          height: 150,
+                          child: const Icon(
+                            Icons.hotel,
+                            size: 50,
+                            color: Colors.grey,
+                          ),
                         ),
                   ),
                 ),
                 Positioned(
-                  top: 12,
-                  right: 12,
+                  top: 8,
+                  right: 8,
                   child: Container(
                     padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
+                      horizontal: 6,
+                      vertical: 3,
                     ),
                     decoration: BoxDecoration(
                       color: Colors.white,
-                      borderRadius: BorderRadius.circular(8),
+                      borderRadius: BorderRadius.circular(6),
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.star, color: Colors.amber, size: 16),
-                        const SizedBox(width: 4),
+                        const Icon(Icons.star, color: Colors.amber, size: 12),
+                        const SizedBox(width: 2),
                         Text(
                           hotel.starRating.toString(),
-                          style: const TextStyle(fontWeight: FontWeight.bold),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ],
                     ),
@@ -374,64 +632,65 @@ class _HotelListPageState extends State<HotelListPage> {
                 ),
               ],
             ),
+
+            // Info
+            // Info
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Text(
+                    hotel.name,
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
+                      Icon(
+                        Icons.location_on,
+                        size: 11,
+                        color: Colors.grey[500],
+                      ),
+                      const SizedBox(width: 2),
                       Expanded(
                         child: Text(
-                          hotel.name,
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
+                          hotel.city,
+                          style: TextStyle(
+                            color: Colors.grey[600],
+                            fontSize: 11,
                           ),
-                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      Text(
-                        '\$200',
-                        style: TextStyle(
-                          color: primaryColor,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(
-                        Icons.location_on,
-                        size: 14,
-                        color: Colors.grey[500],
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: Text(
-                          '${hotel.city}, ${hotel.address}',
-                          style: TextStyle(
-                            color: Colors.grey[600],
-                            fontSize: 13,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
+                  Text(
+                    _getMinPrice(hotel),
+                    style: TextStyle(
+                      color: primaryColor,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      _buildAmenity(Icons.wifi, "Free Wifi"),
-                      const SizedBox(width: 12),
-                      _buildAmenity(Icons.pool, "Pool"),
-                    ],
-                  ),
+
+                  // ✅ Thêm description vào đây
+                  if (hotel.description != null &&
+                      hotel.description!.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      hotel.description!,
+                      style: TextStyle(color: Colors.grey[500], fontSize: 10),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ],
               ),
             ),

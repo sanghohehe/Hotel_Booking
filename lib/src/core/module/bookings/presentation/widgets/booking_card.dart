@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../data/models/booking_model.dart';
@@ -80,14 +81,18 @@ class BookingCard extends StatelessWidget {
                   child:
                       (booking.roomImage != null &&
                               booking.roomImage!.isNotEmpty)
-                          ? Image.network(
-                            booking.roomImage!,
+                          ? CachedNetworkImage(
+                            imageUrl: booking.roomImage!,
                             width: 90,
                             height: 90,
                             fit: BoxFit.cover,
-                            errorBuilder:
-                                (context, error, stackTrace) =>
-                                    _buildPlaceholder(),
+                            // Sử dụng hàm placeholder có sẵn của bạn khi đang tải
+                            placeholder: (context, url) => _buildPlaceholder(),
+                            // Sử dụng hàm placeholder có sẵn của bạn khi lỗi
+                            errorWidget:
+                                (context, url, error) => _buildPlaceholder(),
+                            // Tối ưu bộ nhớ cho ảnh kích thước 90x90
+                            memCacheWidth: 180,
                           )
                           : _buildPlaceholder(),
                 ),
@@ -117,9 +122,7 @@ class BookingCard extends StatelessWidget {
                           ),
                         ),
 
-                      const SizedBox(
-                        height: 2,
-                      ),
+                      const SizedBox(height: 2),
                       Row(
                         children: [
                           Icon(

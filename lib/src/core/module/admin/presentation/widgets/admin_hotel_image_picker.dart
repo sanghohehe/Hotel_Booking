@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -30,11 +31,22 @@ class AdminHotelImagePicker extends StatelessWidget {
                     pickedImage != null
                         ? Image.file(File(pickedImage!.path), fit: BoxFit.cover)
                         : (imageUrl != null && imageUrl!.isNotEmpty)
-                        ? Image.network(
-                          imageUrl!,
+                        ? CachedNetworkImage(
+                          imageUrl: imageUrl!,
                           fit: BoxFit.cover,
-                          errorBuilder:
-                              (_, __, ___) => const Icon(Icons.broken_image),
+                          // Thay thế cho errorBuilder của Image.network
+                          errorWidget:
+                              (context, url, error) => const Icon(
+                                Icons.broken_image,
+                                color: Colors.grey,
+                              ),
+                          // Option: Thêm hiệu ứng loading nhẹ nhàng
+                          placeholder:
+                              (context, url) => const Center(
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
                         )
                         : const Icon(
                           Icons.add_photo_alternate_outlined,

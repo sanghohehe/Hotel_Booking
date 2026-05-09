@@ -16,22 +16,22 @@ class HotelRepositoryImpl
   HotelRepositoryImpl(this._api);
 
   @override
-  Future<List<HotelEntity>> getHotels({double? minRating, String? city, String? keyword}) async {
-    final List<HotelModel> models = await _api.getHotels();
-    return models
-        .where((h) => (minRating == null || h.starRating >= minRating))
-        .where(
-          (h) =>
-              (city == null ||
-                  h.city.toLowerCase().contains(city.toLowerCase())),
-        )
-        .where(
-          (h) =>
-              (keyword == null ||
-                  h.name.toLowerCase().contains(keyword.toLowerCase())),
-        )
-        .map((m) => m.toEntity())
-        .toList();
+  Future<List<HotelEntity>> getHotels({
+    double? minRating,
+    String? city,
+    String? keyword,
+    int page = 1,
+    int limit = 10,
+  }) async {
+    final models = await _api.getHotels(
+      minRating: minRating,
+      city: city,
+      keyword: keyword,
+      page: page,
+      limit: limit,
+    );
+
+    return models.map((m) => m.toEntity()).toList();
   }
 
   @override
@@ -44,13 +44,11 @@ class HotelRepositoryImpl
 
   @override
   Future<bool> isFavorite(String hotelId) async {
-    
     return false;
   }
 
   @override
-  Future<void> toggleFavorite(String hotelId, bool isFavorite) async {
-  }
+  Future<void> toggleFavorite(String hotelId, bool isFavorite) async {}
 
   @override
   Future<List<ReviewModel>> getReviews(String hotelId) async {
@@ -71,8 +69,7 @@ class HotelRepositoryImpl
     String? description,
     required double starRating,
     required List<XFile> multipleImages,
-    required List<String>
-    existingImages, 
+    required List<String> existingImages,
   }) async {
     List<String> finalImageUrls = List<String>.from(existingImages);
 
@@ -87,7 +84,7 @@ class HotelRepositoryImpl
 
       final url = _supabase.storage.from('hotel-images').getPublicUrl(fileName);
 
-      finalImageUrls.add(url);
+      finalImageUrls.add(url.trim().replaceAll('\n', ''));
     }
 
     if (existingHotel == null) {

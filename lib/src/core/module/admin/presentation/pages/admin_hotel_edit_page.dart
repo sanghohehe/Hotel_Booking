@@ -4,6 +4,7 @@ import 'package:booking_app/src/core/module/admin/domain/usecases/image_picker_u
 import 'package:booking_app/src/core/module/admin/domain/usecases/init_hotel_usecase.dart';
 import 'package:booking_app/src/core/module/admin/domain/usecases/load_rooms_usecase.dart';
 import 'package:booking_app/src/core/module/admin/domain/usecases/save_room_type_usecase.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:image_picker/image_picker.dart';
@@ -94,8 +95,9 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
             Navigator.pop(context, true);
           }
           if (state.error != null) {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(SnackBar(content: Text(state.error!)));
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(state.error!)));
           }
         },
         builder: (context, state) {
@@ -111,8 +113,11 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
               ),
             ),
             body: _buildInputs(context, state, Theme.of(context)),
-            bottomNavigationBar:
-                _buildBottomBar(context, state, Theme.of(context)),
+            bottomNavigationBar: _buildBottomBar(
+              context,
+              state,
+              Theme.of(context),
+            ),
           );
         },
       ),
@@ -149,102 +154,119 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: images.isEmpty
-            ? InkWell(
-                onTap: () =>
-                    context.read<AdminHotelEditCubit>().pickImages(),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
+        child:
+            images.isEmpty
+                ? InkWell(
+                  onTap: () => context.read<AdminHotelEditCubit>().pickImages(),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.add_photo_alternate_outlined,
+                        size: 48,
+                        color: Colors.grey[400],
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        "Nhấn để tải ảnh lên",
+                        style: TextStyle(color: Colors.grey[600]),
+                      ),
+                    ],
+                  ),
+                )
+                : Stack(
                   children: [
-                    Icon(
-                      Icons.add_photo_alternate_outlined,
-                      size: 48,
-                      color: Colors.grey[400],
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      "Nhấn để tải ảnh lên",
-                      style: TextStyle(color: Colors.grey[600]),
-                    ),
-                  ],
-                ),
-              )
-            : Stack(
-                children: [
-                  PageView.builder(
-                    itemCount: images.length,
-                    onPageChanged: (i) =>
-                        context.read<AdminHotelEditCubit>().setCurrentIndex(i),
-                    itemBuilder: (_, index) {
-                      final img = images[index];
-                      final isNetwork = img.startsWith('http');
-                      return Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          isNetwork
-                              ? Image.network(img, fit: BoxFit.cover)
-                              : Image.file(File(img), fit: BoxFit.cover),
-                          Positioned(
-                            top: 8,
-                            right: 8,
-                            child: CircleAvatar(
-                              backgroundColor: Colors.black.withOpacity(0.5),
-                              child: IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.white,
+                    PageView.builder(
+                      itemCount: images.length,
+                      onPageChanged:
+                          (i) => context
+                              .read<AdminHotelEditCubit>()
+                              .setCurrentIndex(i),
+                      itemBuilder: (_, index) {
+                        final img = images[index];
+                        final isNetwork = img.startsWith('http');
+                        return Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            isNetwork
+                                ? CachedNetworkImage(
+                                  imageUrl: img,
+                                  fit: BoxFit.cover,
+                                  // Hiển thị loading khi đang tải ảnh
+                                  placeholder:
+                                      (context, url) => const Center(
+                                        child: CircularProgressIndicator(),
+                                      ),
+                                  // Hiển thị icon lỗi nếu không tải được ảnh
+                                  errorWidget:
+                                      (context, url, error) =>
+                                          const Icon(Icons.error),
+                                )
+                                : Image.file(File(img), fit: BoxFit.cover),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: CircleAvatar(
+                                backgroundColor: Colors.black.withOpacity(0.5),
+                                child: IconButton(
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    color: Colors.white,
+                                  ),
+                                  onPressed: () {
+                                    final cubit =
+                                        context.read<AdminHotelEditCubit>();
+                                    if (index < state.existingImages.length) {
+                                      cubit.removeExistingImage(index);
+                                    } else {
+                                      cubit.removeNewImage(
+                                        index - state.existingImages.length,
+                                      );
+                                    }
+                                  },
                                 ),
-                                onPressed: () {
-                                  final cubit =
-                                      context.read<AdminHotelEditCubit>();
-                                  if (index < state.existingImages.length) {
-                                    cubit.removeExistingImage(index);
-                                  } else {
-                                    cubit.removeNewImage(
-                                      index - state.existingImages.length,
-                                    );
-                                  }
-                                },
                               ),
                             ),
+                          ],
+                        );
+                      },
+                    ),
+                    Positioned(
+                      bottom: 12,
+                      right: 12,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          "${state.currentIndex + 1}/${images.length}",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
                           ),
-                        ],
-                      );
-                    },
-                  ),
-                  Positioned(
-                    bottom: 12,
-                    right: 12,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: Colors.black54,
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(
-                        "${state.currentIndex + 1}/${images.length}",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
                         ),
                       ),
                     ),
-                  ),
-                  Positioned(
-                    bottom: 8,
-                    left: 8,
-                    child: FloatingActionButton.small(
-                      heroTag: 'add_img',
-                      onPressed: () =>
-                          context.read<AdminHotelEditCubit>().pickImages(),
-                      child: const Icon(Icons.add_a_photo),
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: FloatingActionButton.small(
+                        heroTag: 'add_img',
+                        onPressed:
+                            () =>
+                                context
+                                    .read<AdminHotelEditCubit>()
+                                    .pickImages(),
+                        child: const Icon(Icons.add_a_photo),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                  ],
+                ),
       ),
     );
   }
@@ -266,8 +288,7 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
             _buildGallery(context, state),
 
             const SizedBox(height: 24),
-            _buildSectionTitle(
-                context, "Thông tin chung", Icons.info_outline),
+            _buildSectionTitle(context, "Thông tin chung", Icons.info_outline),
             const SizedBox(height: 12),
             _customTextField(
               controller: _nameCtrl,
@@ -345,15 +366,16 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
         fillColor: Colors.grey[50],
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       ),
-      items: items.map<DropdownMenuItem<String>>((item) {
-        return DropdownMenuItem<String>(
-          value: item['name'] as String,
-          child: Text(
-            item['name'] as String,
-            overflow: TextOverflow.ellipsis,
-          ),
-        );
-      }).toList(),
+      items:
+          items.map<DropdownMenuItem<String>>((item) {
+            return DropdownMenuItem<String>(
+              value: item['name'] as String,
+              child: Text(
+                item['name'] as String,
+                overflow: TextOverflow.ellipsis,
+              ),
+            );
+          }).toList(),
       onChanged: onChanged,
     );
   }
@@ -435,15 +457,14 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
             color: Colors.white,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.03), blurRadius: 5),
+              BoxShadow(color: Colors.black.withOpacity(0.03), blurRadius: 5),
             ],
           ),
           child: RoomTypeItem(
             room: room,
             onEdit: () => _openEditRoom(context, room),
-            onDelete: () =>
-                _showDeleteDialog(context, room.id, widget.hotel!.id),
+            onDelete:
+                () => _showDeleteDialog(context, room.id, widget.hotel!.id),
           ),
         );
       },
@@ -476,37 +497,39 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
             ),
             elevation: 0,
           ),
-          onPressed: state.isSaving
-              ? null
-              : () {
-                  if (_formKey.currentState!.validate()) {
-                    context.read<AdminHotelEditCubit>().onSave(
-                          existing: widget.hotel,
-                          name: _nameCtrl.text,
-                          city: state.selectedProvince ?? '',
-                          address: _addrCtrl.text,
-                          desc: _descCtrl.text,
-                          detailAddress: _detailAddrCtrl.text,
-                        );
-                  }
-                },
-          child: state.isSaving
-              ? const SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 2,
+          onPressed:
+              state.isSaving
+                  ? null
+                  : () {
+                    if (_formKey.currentState!.validate()) {
+                      context.read<AdminHotelEditCubit>().onSave(
+                        existing: widget.hotel,
+                        name: _nameCtrl.text,
+                        city: state.selectedProvince ?? '',
+                        address: _addrCtrl.text,
+                        desc: _descCtrl.text,
+                        detailAddress: _detailAddrCtrl.text,
+                      );
+                    }
+                  },
+          child:
+              state.isSaving
+                  ? const SizedBox(
+                    height: 24,
+                    width: 24,
+                    child: CircularProgressIndicator(
+                      color: Colors.white,
+                      strokeWidth: 2,
+                    ),
+                  )
+                  : const Text(
+                    "XÁC NHẬN LƯU",
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
                   ),
-                )
-              : const Text(
-                  "XÁC NHẬN LƯU",
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
-                  ),
-                ),
         ),
       ),
     );
@@ -554,8 +577,9 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
               if (!context.mounted) return;
               Navigator.pop(sheetContext);
             } catch (e) {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text("Lỗi: $e")));
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(SnackBar(content: Text("Lỗi: $e")));
             }
           },
         );
@@ -566,23 +590,27 @@ class _AdminHotelEditPageState extends State<AdminHotelEditPage> {
   void _showDeleteDialog(BuildContext context, String roomId, String hotelId) {
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Xóa phòng"),
-        content: const Text("Bạn chắc chắn muốn xóa?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Hủy"),
+      builder:
+          (_) => AlertDialog(
+            title: const Text("Xóa phòng"),
+            content: const Text("Bạn chắc chắn muốn xóa?"),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Hủy"),
+              ),
+              TextButton(
+                onPressed: () {
+                  context.read<AdminHotelEditCubit>().deleteRoom(
+                    roomId,
+                    hotelId,
+                  );
+                  Navigator.pop(context);
+                },
+                child: const Text("Xóa", style: TextStyle(color: Colors.red)),
+              ),
+            ],
           ),
-          TextButton(
-            onPressed: () {
-              context.read<AdminHotelEditCubit>().deleteRoom(roomId, hotelId);
-              Navigator.pop(context);
-            },
-            child: const Text("Xóa", style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
     );
   }
 }

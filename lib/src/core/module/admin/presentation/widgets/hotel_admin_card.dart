@@ -1,3 +1,4 @@
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import '../../../hotel/data/models/hotel_model.dart';
 
@@ -59,11 +60,35 @@ class HotelAdminCard extends StatelessWidget {
     return SizedBox(
       width: 100,
       child:
-          hotel.thumbnailUrl != null
-              ? Image.network(hotel.thumbnailUrl!, fit: BoxFit.cover)
+          hotel.thumbnailUrl != null && hotel.thumbnailUrl!.isNotEmpty
+              ? CachedNetworkImage(
+                imageUrl: hotel.thumbnailUrl!,
+                fit: BoxFit.cover,
+                // Hiển thị một khung màu xám nhẹ trong khi chờ tải ảnh
+                placeholder:
+                    (context, url) => Container(
+                      color: Colors.grey[200],
+                      child: const Center(
+                        child: SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      ),
+                    ),
+                // Hiển thị icon lỗi nếu URL hỏng hoặc không có mạng
+                errorWidget:
+                    (context, url, error) => Container(
+                      color: Colors.grey[200],
+                      child: const Icon(Icons.broken_image, color: Colors.grey),
+                    ),
+              )
               : Container(
                 color: Colors.grey[200],
-                child: const Icon(Icons.image_not_supported),
+                child: const Icon(
+                  Icons.image_not_supported,
+                  color: Colors.grey,
+                ),
               ),
     );
   }

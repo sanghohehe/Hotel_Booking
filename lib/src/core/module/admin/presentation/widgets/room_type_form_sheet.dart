@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../hotel/data/models/hotel_model.dart';
@@ -151,18 +152,44 @@ class _RoomTypeFormSheetState extends State<RoomTypeFormSheet> {
                     onTap: _pickImages,
                     child: Container(
                       width: 80,
+                      margin: const EdgeInsets.only(
+                        right: 8,
+                      ), // Thêm chút margin cho đẹp
                       color: Colors.grey[200],
                       child: const Icon(Icons.add_a_photo),
                     ),
                   ),
 
+                  // Ảnh từ URL (Sử dụng CachedNetworkImage)
                   ..._existingImages.map((e) {
                     return _imageBox(
-                      Image.network(e, fit: BoxFit.cover),
+                      CachedNetworkImage(
+                        imageUrl: e,
+                        fit: BoxFit.cover,
+                        placeholder:
+                            (context, url) => Container(
+                              color: Colors.grey[100],
+                              child: const Center(
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        errorWidget:
+                            (context, url, error) => Container(
+                              color: Colors.grey[100],
+                              child: const Icon(Icons.broken_image),
+                            ),
+                      ),
                       () => setState(() => _existingImages.remove(e)),
                     );
                   }),
 
+                  // Ảnh từ File local (Giữ nguyên Image.file)
                   ..._newImages.map((e) {
                     return _imageBox(
                       Image.file(File(e.path), fit: BoxFit.cover),

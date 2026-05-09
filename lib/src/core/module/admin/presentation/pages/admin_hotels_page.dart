@@ -53,7 +53,7 @@ class _AdminHotelsPageState extends State<AdminHotelsPage> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final data = await _api.getHotels();
+      final data = await _api.getAllHotels();
       setState(() {
         _allHotels = data;
         _filteredHotels = data;

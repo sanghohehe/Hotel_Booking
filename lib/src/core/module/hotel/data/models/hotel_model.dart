@@ -1,11 +1,52 @@
-import 'package:booking_app/src/core/module/hotel/domain/entities/hotel_entity.dart';
+import 'dart:convert';
 
-// Hàm hỗ trợ parse List an toàn dùng chung cho cả 2 Model
+import 'package:booking_app/src/core/module/hotel/domain/entities/hotel_entity.dart';
+import 'package:booking_app/src/core/utils/clean_image_utils.dart';
+
+/// ================= SAFE ARRAY PARSER =================
+///
+/// FIX TRIỆT ĐỂ:
+/// - Không bao giờ crash vì array/string/null
+/// - Tự clean newline
+/// - Tự trim
+/// - Không để malformed array
+/// - Support Supabase text[], jsonb, string
+///
 List<String> _parseList(dynamic data) {
-  if (data == null) return [];
-  if (data is List) return data.map((e) => e.toString()).toList();
-  if (data is String) return [data];
-  return [];
+  try {
+    if (data == null) return [];
+
+    if (data is List) {
+      return data
+          .map((e) => e?.toString().trim() ?? '')
+          .where((e) => e.isNotEmpty && e.length > 10 && e.startsWith('http'))
+          .toList();
+    }
+
+    if (data is String) {
+      String cleaned = data.trim();
+
+      if (cleaned.isEmpty || cleaned == '[""]' || cleaned == '[]') return [];
+
+      // Parse JSON string
+      if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+        try {
+          final decoded = jsonDecode(cleaned);
+          return _parseList(decoded);
+        } catch (_) {}
+      }
+
+      // Single URL
+      if (cleaned.startsWith('http')) {
+        return [cleaned];
+      }
+    }
+
+    return [];
+  } catch (e) {
+    print('PARSE LIST ERROR: $e');
+    return [];
+  }
 }
 
 class RoomTypeModel {
@@ -17,7 +58,10 @@ class RoomTypeModel {
   final double pricePerNight;
   final bool isActive;
   final int inventory;
-  final List<String> imageUrl; // Danh sách ảnh phòng
+
+  /// Danh sách ảnh phòng
+  final List<String> imageUrl;
+
   final List<String> amenities;
 
   RoomTypeModel({
@@ -34,18 +78,36 @@ class RoomTypeModel {
   });
 
   factory RoomTypeModel.fromJson(Map<String, dynamic> json) {
-    return RoomTypeModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      description: json['description'] as String?,
-      capacity: json['capacity'] as int,
-      bedType: json['bed_type'] as String?,
-      pricePerNight: (json['price_per_night'] as num).toDouble(),
-      isActive: (json['is_active'] as bool?) ?? true,
-      inventory: (json['inventory'] as int?) ?? 1,
-      imageUrl: _parseList(json['image_url']),
-      amenities: _parseList(json['amenities']),
-    );
+    try {
+      return RoomTypeModel(
+        id: json['id']?.toString() ?? '',
+
+        name: json['name']?.toString() ?? '',
+
+        description: json['description']?.toString(),
+
+        capacity: (json['capacity'] ?? 0) as int,
+
+        bedType: json['bed_type']?.toString(),
+
+        pricePerNight: ((json['price_per_night'] ?? 0) as num).toDouble(),
+
+        isActive: (json['is_active'] as bool?) ?? true,
+
+        inventory: (json['inventory'] as int?) ?? 1,
+
+        /// FIX ARRAY IMAGE
+        imageUrl: _parseList(json['image_url']),
+
+        /// FIX ARRAY AMENITIES
+        amenities: _parseList(json['amenities']),
+      );
+    } catch (e) {
+      print('ROOM MODEL ERROR: $e');
+      print('ROOM JSON: $json');
+
+      return RoomTypeModel.empty();
+    }
   }
 
   factory RoomTypeModel.empty() {
@@ -63,18 +125,38 @@ class RoomTypeModel {
     );
   }
 
-  Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name,
-    'description': description,
-    'capacity': capacity,
-    'bed_type': bedType,
-    'price_per_night': pricePerNight,
-    'is_active': isActive,
-    'inventory': inventory,
-    'image_url': imageUrl,
-    'amenities': amenities,
-  };
+  Map<String, dynamic> toJson() {
+    try {
+      return {
+        'id': id,
+        'name': name,
+        'description': description?.trim(),
+        'capacity': capacity,
+        'bed_type': bedType?.trim(),
+        'price_per_night': pricePerNight,
+        'is_active': isActive,
+        'inventory': inventory,
+
+        /// FIX SUPABASE ARRAY
+        'image_url':
+            imageUrl
+                .map((e) => e.replaceAll('\n', '').trim())
+                .where((e) => e.isNotEmpty)
+                .toList(),
+
+        /// FIX SUPABASE ARRAY
+        'amenities':
+            amenities
+                .map((e) => e.replaceAll('\n', '').trim())
+                .where((e) => e.isNotEmpty)
+                .toList(),
+      };
+    } catch (e) {
+      print('ROOM TO JSON ERROR: $e');
+
+      return {};
+    }
+  }
 }
 
 class HotelModel {
@@ -84,8 +166,10 @@ class HotelModel {
   final String address;
   final String? description;
   final double starRating;
-  // THAY ĐỔI: Chuyển sang danh sách ảnh để lướt qua lướt về
+
+  /// Danh sách ảnh hotel
   final List<String> images;
+
   final List<RoomTypeModel> roomTypes;
 
   HotelModel({
@@ -100,23 +184,91 @@ class HotelModel {
   });
 
   factory HotelModel.fromJson(Map<String, dynamic> json) {
+    try {
+      final parsedImages = _parseList(json['images'] ?? json['thumbnail_url']);
+
+      return HotelModel(
+        id: json['id']?.toString() ?? '',
+
+        name: json['name']?.toString() ?? '',
+
+        city: json['city']?.toString() ?? '',
+
+        address: json['address']?.toString() ?? '',
+
+        description: json['description']?.toString(),
+
+        starRating: ((json['star_rating'] ?? 0) as num).toDouble(),
+
+        /// FIX TRIỆT ĐỂ ARRAY IMAGE
+        images: parsedImages,
+
+        roomTypes:
+            ((json['room_types'] as List?) ?? [])
+                .map((e) => RoomTypeModel.fromJson(e as Map<String, dynamic>))
+                .toList(),
+      );
+    } catch (e) {
+      print('HOTEL MODEL ERROR: $e');
+      print('HOTEL JSON: $json');
+
+      return HotelModel.empty();
+    }
+  }
+
+  factory HotelModel.empty() {
     return HotelModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      city: json['city'] as String,
-      address: json['address'] as String,
-      description: json['description'] as String?,
-      starRating: (json['star_rating'] as num?)?.toDouble() ?? 0,
-      // Dùng hàm parse list an toàn để lấy danh sách ảnh khách sạn
-      images: _parseList(json['images'] ?? json['thumbnail_url']),
-      roomTypes:
-          ((json['room_types'] as List?) ?? [])
-              .map((e) => RoomTypeModel.fromJson(e as Map<String, dynamic>))
-              .toList(),
+      id: '',
+      name: '',
+      city: '',
+      address: '',
+      description: '',
+      starRating: 0,
+      images: [],
+      roomTypes: [],
     );
   }
 
-  String? get thumbnailUrl => images.isNotEmpty ? images.first : null;
+  /// Thumbnail đầu tiên
+  String? get thumbnailUrl {
+    if (images.isEmpty) return null;
+
+    final first = images.first.trim();
+
+    if (!first.startsWith('http')) {
+      return null;
+    }
+
+    return first;
+  }
+
+  Map<String, dynamic> toJson() {
+    try {
+      return {
+        'id': id,
+        'name': name.trim(),
+        'city': city.trim(),
+        'address': address.trim(),
+        'description': description?.trim(),
+        'star_rating': starRating,
+
+        /// FIX ARRAY SUPABASE
+        'images':
+            images
+                .map((e) => e.replaceAll('\n', '').trim())
+                .where((e) => e.isNotEmpty)
+                .toList(),
+
+        'thumbnail_url': images.isNotEmpty ? images.first : null,
+
+        'room_types': roomTypes.map((e) => e.toJson()).toList(),
+      };
+    } catch (e) {
+      print('HOTEL TO JSON ERROR: $e');
+
+      return {};
+    }
+  }
 
   HotelEntity toEntity() {
     return HotelEntity(
@@ -125,13 +277,16 @@ class HotelModel {
       city: city,
       address: address,
       starRating: starRating,
-      // Ảnh thumbnail cho danh sách
+
+      /// thumbnail cho card
       thumbnailUrl: images.isNotEmpty ? images.first : null,
+
       description: description,
-      // Đảm bảo danh sách RoomTypeModel được giữ nguyên (vì nó đã có imageUrl riêng)
-      roomTypes: roomTypes,
-      // Mảng ảnh dùng cho Banner lướt qua lướt về
+
+      /// slider banner
       images: images,
+
+      roomTypes: roomTypes,
     );
   }
 }

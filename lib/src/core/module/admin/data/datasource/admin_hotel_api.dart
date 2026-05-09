@@ -21,7 +21,8 @@ class AdminHotelApi {
               'address': address,
               'description': description,
               'star_rating': starRating,
-              'thumbnail_url': thumbnailUrl,
+              'thumbnail_url': thumbnailUrl?.trim().replaceAll('\n', ''),
+              'images': thumbnailUrl != null ? [thumbnailUrl] : [],
             })
             .select()
             .single();
@@ -46,7 +47,8 @@ class AdminHotelApi {
               'address': address,
               'description': description,
               'star_rating': starRating,
-              'thumbnail_url': thumbnailUrl,
+              'thumbnail_url': thumbnailUrl?.trim().replaceAll('\n', ''),
+              'images': thumbnailUrl != null ? [thumbnailUrl] : [],
             })
             .eq('id', id)
             .select()

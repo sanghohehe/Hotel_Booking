@@ -1,3 +1,4 @@
+import 'package:booking_app/src/core/module/hotel/data/recently_viewed_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../../domain/entities/hotel_entity.dart';
@@ -8,7 +9,8 @@ import 'widgets/hotel_image_header.dart';
 import 'widgets/review_list_section.dart';
 import 'widgets/room_card.dart';
 
-class HotelDetailPage extends StatelessWidget {
+class HotelDetailPage extends StatefulWidget {
+  // ✅ đổi sang StatefulWidget
   final HotelEntity hotel;
   final bool openReviewOnStart;
 
@@ -19,18 +21,32 @@ class HotelDetailPage extends StatelessWidget {
   });
 
   @override
+  State<HotelDetailPage> createState() => _HotelDetailPageState();
+}
+
+class _HotelDetailPageState extends State<HotelDetailPage> {
+  @override
+  void initState() {
+    super.initState();
+    // ✅ Tự động lưu khi user mở trang
+    RecentlyViewedService.saveHotel(widget.hotel);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    // Giữ nguyên toàn bộ build như cũ, chỉ đổi hotel → widget.hotel
     final theme = Theme.of(context);
 
     return BlocProvider(
       create:
           (context) =>
-              HotelDetailCubit(context.read())..loadHotelDetail(hotel.id),
+              HotelDetailCubit(context.read())
+                ..loadHotelDetail(widget.hotel.id),
       child: Scaffold(
         backgroundColor: const Color(0xFFF8F9FA),
         body: BlocBuilder<HotelDetailCubit, HotelDetailState>(
           builder: (context, state) {
-            final displayHotel = state.hotel ?? hotel;
+            final displayHotel = state.hotel ?? widget.hotel;
 
             return CustomScrollView(
               physics: const BouncingScrollPhysics(),
@@ -42,11 +58,10 @@ class HotelDetailPage extends StatelessWidget {
                   backgroundColor: theme.primaryColor,
                   flexibleSpace: FlexibleSpaceBar(
                     background: HotelImageHeader(
-                      images: displayHotel.images, // Danh sách nhiều ảnh
-                      url: displayHotel.thumbnailUrl, // Ảnh đại diện dự phòng
+                      images: displayHotel.images,
+                      url: displayHotel.thumbnailUrl,
                     ),
                   ),
-                  // Nút back bo tròn
                   leading: Padding(
                     padding: const EdgeInsets.all(8.0),
                     child: CircleAvatar(
@@ -56,38 +71,40 @@ class HotelDetailPage extends StatelessWidget {
                   ),
                   actions: const [FavoriteButton()],
                 ),
-
-                // 2. Nội dung chi tiết
                 SliverToBoxAdapter(
                   child: Container(
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // Tiêu đề & Rating
                         _buildHeroSection(theme, displayHotel),
-
                         const SizedBox(height: 24),
-
-                        // Mô tả (Hàm mình đã viết ở trên)
                         _buildDescription(theme, displayHotel),
-
                         const SizedBox(height: 24),
-
-                        // Danh sách phòng (Dùng RoomCard của bạn)
                         _buildSectionHeader(
                           theme,
                           'Available Rooms',
                           Icons.bed_outlined,
                         ),
                         const SizedBox(height: 12),
-                        ...displayHotel.roomTypes.map(
-                          (room) => RoomCard(hotel: displayHotel, room: room),
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          itemCount: displayHotel.roomTypes.length,
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                crossAxisSpacing: 10,
+                                mainAxisSpacing: 12,
+                                childAspectRatio:
+                                    0.65, // Tăng tỷ lệ từ 0.56 lên 0.65 để vừa vặn chiều cao
+                              ),
+                          itemBuilder: (context, index) {
+                            final room = displayHotel.roomTypes[index];
+                            return RoomCard(hotel: displayHotel, room: room);
+                          },
                         ),
-
                         const SizedBox(height: 24),
-
-                        // Review (Dùng ReviewListSection của bạn)
                         ReviewListSection(onAddReview: () {}),
                       ],
                     ),

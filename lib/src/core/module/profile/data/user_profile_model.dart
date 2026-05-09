@@ -17,15 +17,15 @@ class UserProfileModel {
 
   factory UserProfileModel.fromJson(Map<String, dynamic> json) {
     return UserProfileModel(
-      userId: json['user_id'] as String,
-      fullName: json['full_name'] as String?,
-      phoneNumber: json['phone_number'] as String?,
+      userId: json['user_id']?.toString() ?? '',
+      fullName: json['full_name']?.toString(),
+      phoneNumber: json['phone_number']?.toString(),
       dateOfBirth:
           json['date_of_birth'] != null
-              ? DateTime.parse(json['date_of_birth'] as String)
+              ? DateTime.tryParse(json['date_of_birth'].toString())
               : null,
-      address: json['address'] as String?,
-      avatarUrl: json['avatar_url'] as String?,
+      address: json['address']?.toString(),
+      avatarUrl: json['avatar_url']?.toString(),
     );
   }
 }

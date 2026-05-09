@@ -5,5 +5,7 @@ abstract class HotelRepository {
     double? minRating,
     String? city,
     String? keyword,
+    int page,
+    int limit,
   });
 }
