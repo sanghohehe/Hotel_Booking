@@ -39,8 +39,7 @@ class _ChatbotPageState extends State<ChatbotPage>
   @override
   void initState() {
     super.initState();
-    context.read<ChatbotCubit>().loadHistory();
-
+    context.read<ChatbotCubit>().startNewChat();
     _dotAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -213,7 +212,116 @@ class _ChatbotPageState extends State<ChatbotPage>
 
     return Scaffold(
       backgroundColor: _bgPage,
+
+      // 👇 BUTTON XEM LỊCH SỬ CHAT
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(20),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF0A84FF), Color(0xFF34AADC)],
+                  ),
+                ),
+                child: const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.history, color: Colors.white, size: 32),
+                    SizedBox(height: 12),
+                    Text(
+                      'Lịch sử Chat',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              Expanded(
+                child: FutureBuilder(
+                  future: Supabase.instance.client
+                      .from('conversations')
+                      .select()
+                      .order('created_at', ascending: false),
+
+                  builder: (context, snapshot) {
+                    if (snapshot.connectionState == ConnectionState.waiting) {
+                      return const Center(child: CircularProgressIndicator());
+                    }
+
+                    if (snapshot.hasError) {
+                      return Center(child: Text('Lỗi: ${snapshot.error}'));
+                    }
+
+                    if (!snapshot.hasData) {
+                      return const Center(child: Text('Không có dữ liệu'));
+                    }
+
+                    final sessions = snapshot.data as List<dynamic>;
+
+                    if (sessions.isEmpty) {
+                      return const Center(child: Text('Chưa có lịch sử chat'));
+                    }
+
+                    return ListView.separated(
+                      itemCount: sessions.length,
+                      separatorBuilder:
+                          (_, __) =>
+                              Divider(height: 1, color: Colors.grey.shade200),
+                      itemBuilder: (context, index) {
+                        final s = sessions[index];
+
+                        return ListTile(
+                          leading: Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: _primary.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Icon(
+                              Icons.chat_bubble_outline,
+                              color: _primary,
+                            ),
+                          ),
+
+                          title: Text(
+                            s['title'] ?? 'Cuộc trò chuyện ${index + 1}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+
+                          subtitle: Text(
+                            s['created_at'].toString().substring(0, 16),
+                          ),
+
+                          trailing: const Icon(Icons.chevron_right),
+
+                          onTap: () async {
+                            Navigator.pop(context);
+
+                            await cubit.loadConversation(s['id']);
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+
       appBar: _buildAppBar(cubit),
+
       floatingActionButton:
           _showScrollFab
               ? FloatingActionButton.small(
@@ -225,20 +333,27 @@ class _ChatbotPageState extends State<ChatbotPage>
                 ),
               )
               : null,
+
       body: BlocConsumer<ChatbotCubit, ChatbotState>(
         listener: (ctx, state) {
-          // Cuộn xuống khi có tin nhắn mới hoặc đang stream
-          if (state.isSending || state.messages.isNotEmpty) _scrollToBottom();
+          if (state.isSending || state.messages.isNotEmpty) {
+            _scrollToBottom();
+          }
         },
+
         builder: (ctx, state) {
           return Column(
             children: [
               _buildContextBar(state, cubit),
+
               if (state.botContext['hotel_id'] == null) _buildCityChips(cubit),
+
               Expanded(child: _buildMessageList(state, cubit)),
-              // Typing dots chỉ hiện khi isSending nhưng chưa có streaming text
+
               if (state.isSending && !state.isStreaming) _buildTypingDots(),
+
               _buildQuickReplies(state, cubit),
+
               _buildInputArea(state, cubit),
             ],
           );

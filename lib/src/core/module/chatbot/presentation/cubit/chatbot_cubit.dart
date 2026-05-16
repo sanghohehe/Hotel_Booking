@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -15,41 +14,67 @@ class ChatbotCubit extends Cubit<ChatbotState> {
   final String _edgeFunctionUrl =
       'https://vangrwbliciqgrkwgmou.supabase.co/functions/v1/chatbot';
 
-  // 2. Sửa Constructor để nhận tham số này
-  ChatbotCubit(this.chatbotUseCase) : super(ChatbotState());
+  ChatbotCubit(this.chatbotUseCase) : super(ChatbotState.initial());
 
-  // ─── Reset ────────────────────────────────────────────────────────────────
-  void reset() => emit(ChatbotState());
+  // ───────────────── RESET ─────────────────
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
+  void reset() {
+    emit(ChatbotState.initial());
+  }
+
+  void startNewChat() {
+    emit(
+      state.copyWith(
+        messages: [],
+        botContext: {},
+        streamingText: '',
+        clearConversationId: true,
+      ),
+    );
+  }
+
+  // ───────────────── HELPERS ─────────────────
+
   String _fmtDate(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  // ───────────────── CONTEXT ─────────────────
 
   void updateGuests(int count) {
     emit(state.copyWith(guests: count));
     updateBotContext({'guests': count});
   }
 
+  void updateBotContext(Map<String, dynamic> updates) {
+    final newCtx = Map<String, dynamic>.from(state.botContext)..addAll(updates);
+
+    emit(state.copyWith(botContext: newCtx));
+  }
+
   void onDateRangeSelected(DateTimeRange range) {
     final ci = _fmtDate(range.start);
     final co = _fmtDate(range.end);
+
     send(
       'còn phòng ($ci → $co)',
       contextOverride: {'check_in': ci, 'check_out': co},
     );
   }
 
-  // ─── Flow Đặt Phòng ───────────────────────────────────────────────────────
+  // ───────────────── FLOW ĐẶT PHÒNG ─────────────────
+
   void selectHotel(dynamic hotel) {
     updateBotContext({'hotel_id': hotel['id'], 'hotel_name': hotel['name']});
+
     send(
-      "Tôi đã chọn khách sạn **${hotel['name']}**, cho mình xem phòng trống nhé",
+      'Tôi đã chọn khách sạn ${hotel['name']}, cho mình xem phòng trống nhé',
       addUserBubble: false,
     );
   }
 
   void bookRoom(dynamic room) {
     final roomId = room['id'] ?? room['room_type_id'];
+
     send(
       'đặt phòng',
       contextOverride: {
@@ -59,32 +84,37 @@ class ChatbotCubit extends Cubit<ChatbotState> {
     );
   }
 
-  void updateBotContext(Map<String, dynamic> updates) {
-    final newCtx = Map<String, dynamic>.from(state.botContext)..addAll(updates);
-    emit(state.copyWith(botContext: newCtx));
-  }
+  // ───────────────── SEND MESSAGE ─────────────────
 
-  // ─── Send Message ─────────────────────────────────────────────────────────
   Future<void> send(
     String text, {
     bool addUserBubble = true,
     Map<String, dynamic>? contextOverride,
   }) async {
-    if (text.isEmpty || state.isSending) return;
+    if (text.trim().isEmpty || state.isSending) {
+      return;
+    }
 
     final activeContext = Map<String, dynamic>.from(state.botContext);
+
     if (contextOverride != null) {
       activeContext.addAll(contextOverride);
+
       emit(state.copyWith(botContext: activeContext));
     }
 
     var currentMessages = List<ChatMessageEntity>.from(state.messages);
+
     if (addUserBubble) {
       currentMessages.add(ChatMessageEntity(role: 'user', content: text));
+
       emit(state.copyWith(messages: currentMessages, isSending: true));
+    } else {
+      emit(state.copyWith(isSending: true));
     }
 
     final session = Supabase.instance.client.auth.currentSession;
+
     if (session == null) {
       _appendError('Phiên đăng nhập không hợp lệ.');
       return;
@@ -96,7 +126,7 @@ class ChatbotCubit extends Cubit<ChatbotState> {
             .toList();
 
     try {
-      await _sendStream(
+      await _sendRequest(
         text: text,
         history: history,
         context: activeContext,
@@ -107,19 +137,17 @@ class ChatbotCubit extends Cubit<ChatbotState> {
     }
   }
 
-  Future<void> loadHistory() async {
+  // ───────────────── LOAD CONVERSATION ─────────────────
+
+  Future<void> loadConversation(String conversationId) async {
     try {
-      final user = Supabase.instance.client.auth.currentUser;
-
-      if (user == null) return;
-
       emit(state.copyWith(isSending: true));
 
       final res = await Supabase.instance.client
           .from('chat_messages')
           .select()
-          .eq('user_id', user.id)
-          .order('created_at');
+          .eq('conversation_id', conversationId)
+          .order('created_at', ascending: true);
 
       final messages =
           (res as List).map((e) {
@@ -136,112 +164,67 @@ class ChatbotCubit extends Cubit<ChatbotState> {
             );
           }).toList();
 
-      emit(state.copyWith(isSending: false, messages: messages));
+      emit(
+        state.copyWith(
+          messages: messages,
+          conversationId: conversationId,
+          isSending: false,
+          streamingText: '',
+        ),
+      );
     } catch (e) {
       emit(state.copyWith(isSending: false));
     }
   }
 
-  // ─── Streaming via SSE ────────────────────────────────────────────────────
-  Future<void> _sendStream({
+  // ───────────────── REQUEST ─────────────────
+
+  Future<void> _sendRequest({
     required String text,
     required List<Map<String, dynamic>> history,
     required Map<String, dynamic> context,
     required String token,
   }) async {
     final uri = Uri.parse(_edgeFunctionUrl);
+
     final body = jsonEncode({
       'message': text,
       'history': history,
+      'conversation_id': state.conversationId,
       'context': context,
-      'stream': true,
+
+      // IMPORTANT
+      'stream': false,
     });
 
-    final client = http.Client();
-    try {
-      final request =
-          http.Request('POST', uri)
-            ..headers.addAll({
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
-            })
-            ..body = body;
-
-      final streamed = await client.send(request);
-
-      if (streamed.statusCode != 200) {
-        final errBody = await streamed.stream.bytesToString();
-        _appendError('Server lỗi ${streamed.statusCode}: $errBody');
-        return;
-      }
-
-      final contentType = streamed.headers['content-type'] ?? '';
-
-      if (contentType.contains('text/event-stream')) {
-        await _consumeSse(streamed.stream);
-      } else {
-        final raw = await streamed.stream.bytesToString();
-        _handleJsonResponse(raw);
-      }
-    } finally {
-      client.close();
-    }
-  }
-
-  Future<void> _consumeSse(Stream<List<int>> byteStream) async {
-    final buffer = StringBuffer();
-    String accumulated = '';
-
-    await for (final bytes in byteStream) {
-      buffer.write(utf8.decode(bytes, allowMalformed: true));
-      final raw = buffer.toString();
-      buffer.clear();
-
-      final lines = raw.split('\n');
-      for (final line in lines) {
-        final trimmed = line.trim();
-        if (!trimmed.startsWith('data:')) continue;
-        final payload = trimmed.substring(5).trim();
-
-        if (payload == '[DONE]') {
-          _flushStreamingText(accumulated);
-          return;
-        }
-
-        try {
-          final decoded = jsonDecode(payload);
-          if (decoded is String) {
-            accumulated += decoded;
-            emit(state.copyWith(isSending: true, streamingText: accumulated));
-          } else if (decoded is Map && decoded.containsKey('error')) {
-            _appendError(decoded['error'].toString());
-            return;
-          }
-        } catch (_) {}
-      }
-    }
-
-    if (accumulated.isNotEmpty) _flushStreamingText(accumulated);
-  }
-
-  void _flushStreamingText(String text) {
-    final finalMessages = List<ChatMessageEntity>.from(state.messages)
-      ..add(ChatMessageEntity(role: 'assistant', content: text));
-    emit(
-      state.copyWith(
-        messages: finalMessages,
-        isSending: false,
-        streamingText: '',
-      ),
+    final response = await http.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: body,
     );
+
+    if (response.statusCode != 200) {
+      _appendError('Server lỗi ${response.statusCode}');
+      return;
+    }
+
+    _handleJsonResponse(response.body);
   }
 
-  // ─── Xử lý JSON Response (Cập nhật đầy đủ) ───────────────────────────────
+  // ───────────────── HANDLE RESPONSE ─────────────────
+
   void _handleJsonResponse(String raw) {
     try {
       final data = jsonDecode(raw) as Map<String, dynamic>;
+
       final reply = data['reply'] as String? ?? '';
+
       final type = data['type'] as String?;
+
+      final conversationId = data['conversation_id'] as String?;
 
       final msg = ChatMessageEntity(
         role: 'assistant',
@@ -250,6 +233,7 @@ class ChatbotCubit extends Cubit<ChatbotState> {
         hotels: data['hotels'] as List<dynamic>?,
         availability: data['availability'] as List<dynamic>?,
         bookings: data['bookings'] as List<dynamic>?,
+        booking: data['booking'],
       );
 
       final finalMessages = List<ChatMessageEntity>.from(state.messages)
@@ -258,6 +242,7 @@ class ChatbotCubit extends Cubit<ChatbotState> {
       emit(
         state.copyWith(
           messages: finalMessages,
+          conversationId: conversationId ?? state.conversationId,
           isSending: false,
           streamingText: '',
         ),
@@ -267,9 +252,12 @@ class ChatbotCubit extends Cubit<ChatbotState> {
     }
   }
 
+  // ───────────────── ERROR ─────────────────
+
   void _appendError(String msg) {
     final finalMessages = List<ChatMessageEntity>.from(state.messages)
       ..add(ChatMessageEntity(role: 'assistant', content: '⚠️ $msg'));
+
     emit(
       state.copyWith(
         messages: finalMessages,

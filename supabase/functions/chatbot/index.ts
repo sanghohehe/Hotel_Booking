@@ -7,6 +7,7 @@ type Role = "user" | "assistant";
 
 type ChatReq = {
   message: string;
+  conversation_id?: string;
   history?: Array<{ role: Role; content: string }>;
   context?: {
     city?: string;
@@ -33,21 +34,25 @@ type Intent =
 async function saveMessage(
   supabase: any,
   userId: string,
+  conversationId: string,
   role: "user" | "assistant",
   message: string,
   metadata?: any,
 ) {
-  try {
-    await supabase
-      .from("chat_messages")
-      .insert({
-        user_id: userId,
-        role,
-        message,
-        metadata: metadata ?? {},
-      });
-  } catch (e) {
-    console.error("saveMessage error", e);
+  const { error } = await supabase
+    .from("chat_messages")
+    .insert({
+      user_id: userId,
+      conversation_id: conversationId,
+      role,
+      message,
+      metadata: metadata ?? {},
+    });
+
+  if (error) {
+    console.error("SAVE MESSAGE ERROR:", error);
+
+    throw new Error(error.message);
   }
 }
 
@@ -260,8 +265,6 @@ serve(async (req) => {
     const message =
       body.message?.trim() ?? "";
 
-    const ctx = body.context ?? {};
-
     if (!message) {
       return json(
         {
@@ -271,16 +274,53 @@ serve(async (req) => {
       );
     }
 
-    // save user message
+    // ───── CONVERSATION ─────
+
+    let conversationId =
+      body.conversation_id;
+
+    if (!conversationId) {
+      const {
+        data: conv,
+        error: convError,
+      } = await supabase
+        .from("conversations")
+        .insert({
+          user_id: user.id,
+          title: message.slice(0, 50),
+        })
+        .select()
+        .single();
+
+      if (convError || !conv) {
+        return json(
+          {
+            reply:
+              "❌ Không tạo được conversation.",
+          },
+          500,
+        );
+      }
+
+      conversationId = conv.id;
+    }
+
+    // ───── SAVE USER MESSAGE ─────
 
     await saveMessage(
       supabase,
       user.id,
+      conversationId,
       "user",
       message,
+      {
+        type: "user_message",
+      },
     );
 
     // ───── CONTEXT ─────
+
+    const ctx = body.context ?? {};
 
     const dates = extractDates(message);
 
@@ -336,8 +376,10 @@ serve(async (req) => {
         );
       }
 
-      const { data, error } =
-        await query;
+      const {
+        data,
+        error,
+      } = await query;
 
       if (error) {
         return json({
@@ -349,46 +391,27 @@ serve(async (req) => {
 
       const hotels = data ?? [];
 
-      if (!hotels.length) {
-        const assistantReply =
-          city
-            ? `😔 Không tìm thấy khách sạn ở ${city}.`
-            : "Bạn muốn tìm khách sạn ở đâu?";
-
-        await saveMessage(
-          supabase,
-          user.id,
-          "assistant",
-          assistantReply,
-          {
-            type: "hotel_search",
-            hotels: [],
-          },
-        );
-
-        return json({
-          type: "hotel_search",
-          hotels: [],
-          reply: assistantReply,
-        });
-      }
-
-      const lines = hotels.map(
-        (h: any) =>
-          `• **${h.name}** ${"⭐".repeat(
-            h.star_rating ?? 0,
-          )}\n📍 ${h.city} - ${
-            h.address ?? ""
-          }`,
-      );
-
       const assistantReply =
-        `🏨 Tìm thấy ${hotels.length} khách sạn:\n\n` +
-        lines.join("\n\n");
+        hotels.length === 0
+          ? city
+            ? `😔 Không tìm thấy khách sạn ở ${city}.`
+            : "Bạn muốn tìm khách sạn ở đâu?"
+          : `🏨 Tìm thấy ${hotels.length} khách sạn:\n\n` +
+            hotels
+              .map(
+                (h: any) =>
+                  `• **${h.name}** ${"⭐".repeat(
+                    h.star_rating ?? 0,
+                  )}\n📍 ${h.city} - ${
+                    h.address ?? ""
+                  }`,
+              )
+              .join("\n\n");
 
       await saveMessage(
         supabase,
         user.id,
+        conversationId,
         "assistant",
         assistantReply,
         {
@@ -398,6 +421,8 @@ serve(async (req) => {
       );
 
       return json({
+        conversation_id:
+          conversationId,
         type: "hotel_search",
         hotels,
         reply: assistantReply,
@@ -414,6 +439,7 @@ serve(async (req) => {
         await saveMessage(
           supabase,
           user.id,
+          conversationId,
           "assistant",
           assistantReply,
           {
@@ -423,6 +449,8 @@ serve(async (req) => {
         );
 
         return json({
+          conversation_id:
+            conversationId,
           type: "availability",
           availability: [],
           reply: assistantReply,
@@ -436,6 +464,7 @@ serve(async (req) => {
         await saveMessage(
           supabase,
           user.id,
+          conversationId,
           "assistant",
           assistantReply,
           {
@@ -445,22 +474,26 @@ serve(async (req) => {
         );
 
         return json({
+          conversation_id:
+            conversationId,
           type: "availability",
           availability: [],
           reply: assistantReply,
         });
       }
 
-      const { data, error } =
-        await supabase.rpc(
-          "get_available_room_types_v2",
-          {
-            p_hotel_id: hotelId,
-            p_check_in: check_in,
-            p_check_out: check_out,
-            p_guests: guests,
-          },
-        );
+      const {
+        data,
+        error,
+      } = await supabase.rpc(
+        "get_available_room_types_v2",
+        {
+          p_hotel_id: hotelId,
+          p_check_in: check_in,
+          p_check_out: check_out,
+          p_guests: guests,
+        },
+      );
 
       if (error) {
         return json({
@@ -472,50 +505,28 @@ serve(async (req) => {
 
       const rooms = data ?? [];
 
-      if (!rooms.length) {
-        const assistantReply =
-          "😔 Không còn phòng trống.";
-
-        await saveMessage(
-          supabase,
-          user.id,
-          "assistant",
-          assistantReply,
-          {
-            type: "availability",
-            availability: [],
-          },
-        );
-
-        return json({
-          type: "availability",
-          availability: [],
-          reply: assistantReply,
-        });
-      }
-
-      const nights =
-        daysBetween(
-          check_in,
-          check_out,
-        );
-
-      const lines = rooms.map(
-        (r: any) =>
-          `• **${r.name}**\n💰 ${money(
-            r.price_per_night,
-          )}/đêm\n🛏 Còn ${
-            r.available_rooms
-          } phòng`,
-      );
-
       const assistantReply =
-        `🛏 Phòng trống (${nights} đêm):\n\n` +
-        lines.join("\n\n");
+        rooms.length === 0
+          ? "😔 Không còn phòng trống."
+          : `🛏 Phòng trống (${daysBetween(
+              check_in,
+              check_out,
+            )} đêm):\n\n` +
+            rooms
+              .map(
+                (r: any) =>
+                  `• **${r.name}**\n💰 ${money(
+                    r.price_per_night,
+                  )}/đêm\n🛏 Còn ${
+                    r.available_rooms
+                  } phòng`,
+              )
+              .join("\n\n");
 
       await saveMessage(
         supabase,
         user.id,
+        conversationId,
         "assistant",
         assistantReply,
         {
@@ -525,6 +536,8 @@ serve(async (req) => {
       );
 
       return json({
+        conversation_id:
+          conversationId,
         type: "availability",
         availability: rooms,
         reply: assistantReply,
@@ -546,6 +559,7 @@ serve(async (req) => {
         await saveMessage(
           supabase,
           user.id,
+          conversationId,
           "assistant",
           assistantReply,
           {
@@ -554,6 +568,8 @@ serve(async (req) => {
         );
 
         return json({
+          conversation_id:
+            conversationId,
           type: "booking_created",
           reply: assistantReply,
         });
@@ -577,6 +593,7 @@ serve(async (req) => {
         await saveMessage(
           supabase,
           user.id,
+          conversationId,
           "assistant",
           assistantReply,
           {
@@ -585,20 +602,19 @@ serve(async (req) => {
         );
 
         return json({
+          conversation_id:
+            conversationId,
           type: "booking_created",
           reply: assistantReply,
         });
       }
 
-      const nights =
+      const total =
+        Number(rt.price_per_night) *
         daysBetween(
           check_in,
           check_out,
         );
-
-      const total =
-        Number(rt.price_per_night) *
-        nights;
 
       const {
         data: booking,
@@ -642,6 +658,7 @@ serve(async (req) => {
       await saveMessage(
         supabase,
         user.id,
+        conversationId,
         "assistant",
         assistantReply,
         {
@@ -651,6 +668,8 @@ serve(async (req) => {
       );
 
       return json({
+        conversation_id:
+          conversationId,
         type: "booking_created",
         booking,
         reply: assistantReply,
@@ -660,18 +679,20 @@ serve(async (req) => {
     // ───────────────── LIST BOOKINGS ─────────────────
 
     if (intent === "list_bookings") {
-      const { data, error } =
-        await supabase
-          .from("bookings")
-          .select(`
-            *,
-            hotels(name),
-            room_types(name)
-          `)
-          .eq("user_id", user.id)
-          .order("created_at", {
-            ascending: false,
-          });
+      const {
+        data,
+        error,
+      } = await supabase
+        .from("bookings")
+        .select(`
+          *,
+          hotels(name),
+          room_types(name)
+        `)
+        .eq("user_id", user.id)
+        .order("created_at", {
+          ascending: false,
+        });
 
       if (error) {
         return json({
@@ -683,46 +704,27 @@ serve(async (req) => {
       const bookings =
         data ?? [];
 
-      if (!bookings.length) {
-        const assistantReply =
-          "📭 Bạn chưa có booking nào.";
-
-        await saveMessage(
-          supabase,
-          user.id,
-          "assistant",
-          assistantReply,
-          {
-            type: "bookings_list",
-            bookings: [],
-          },
-        );
-
-        return json({
-          type: "bookings_list",
-          bookings: [],
-          reply: assistantReply,
-        });
-      }
-
-      const lines = bookings.map(
-        (b: any, i: number) =>
-          `${i + 1}. **${
-            b.hotels?.name
-          }**\n📅 ${b.check_in} → ${
-            b.check_out
-          }\n💰 ${money(
-            b.total_price,
-          )}`,
-      );
-
       const assistantReply =
-        "📋 Booking của bạn:\n\n" +
-        lines.join("\n\n");
+        bookings.length === 0
+          ? "📭 Bạn chưa có booking nào."
+          : "📋 Booking của bạn:\n\n" +
+            bookings
+              .map(
+                (b: any, i: number) =>
+                  `${i + 1}. **${
+                    b.hotels?.name
+                  }**\n📅 ${b.check_in} → ${
+                    b.check_out
+                  }\n💰 ${money(
+                    b.total_price,
+                  )}`,
+              )
+              .join("\n\n");
 
       await saveMessage(
         supabase,
         user.id,
+        conversationId,
         "assistant",
         assistantReply,
         {
@@ -732,6 +734,8 @@ serve(async (req) => {
       );
 
       return json({
+        conversation_id:
+          conversationId,
         type: "bookings_list",
         bookings,
         reply: assistantReply,
@@ -748,6 +752,7 @@ serve(async (req) => {
         await saveMessage(
           supabase,
           user.id,
+          conversationId,
           "assistant",
           assistantReply,
           {
@@ -756,6 +761,8 @@ serve(async (req) => {
         );
 
         return json({
+          conversation_id:
+            conversationId,
           type: "booking_cancelled",
           reply: assistantReply,
         });
@@ -781,6 +788,7 @@ serve(async (req) => {
         await saveMessage(
           supabase,
           user.id,
+          conversationId,
           "assistant",
           assistantReply,
           {
@@ -789,6 +797,8 @@ serve(async (req) => {
         );
 
         return json({
+          conversation_id:
+            conversationId,
           type: "booking_cancelled",
           reply: assistantReply,
         });
@@ -800,6 +810,7 @@ serve(async (req) => {
       await saveMessage(
         supabase,
         user.id,
+        conversationId,
         "assistant",
         assistantReply,
         {
@@ -809,6 +820,8 @@ serve(async (req) => {
       );
 
       return json({
+        conversation_id:
+          conversationId,
         type: "booking_cancelled",
         booking,
         reply: assistantReply,
@@ -838,6 +851,7 @@ Trả lời tiếng Việt thân thiện.
     await saveMessage(
       supabase,
       user.id,
+      conversationId,
       "assistant",
       reply,
       {
@@ -846,6 +860,8 @@ Trả lời tiếng Việt thân thiện.
     );
 
     return json({
+      conversation_id:
+        conversationId,
       type: "general_chat",
       reply,
     });
@@ -853,8 +869,7 @@ Trả lời tiếng Việt thân thiện.
   } catch (e) {
     return json(
       {
-        reply:
-          "⚠️ Có lỗi hệ thống.",
+        reply: "⚠️ Có lỗi hệ thống.",
         error:
           e instanceof Error
             ? e.message
